@@ -1,4 +1,4 @@
-import type { Message } from "./atoms";
+import type { Message, SearchSettings } from "./atoms";
 
 const API = "/api";
 
@@ -36,17 +36,21 @@ export async function fetchModels(): Promise<{ models: string[] }> {
 export interface StreamChunk {
     content?: string;
     thinking?: string;
+    toolCall?: { id: string; name: string; arguments: string };
+    toolResult?: { toolCallId: string; content: string };
+    clearContent?: boolean;
 }
 
 export async function* streamChat(
     messages: Message[],
     model: string,
     signal?: AbortSignal,
+    toolsEnabled: boolean = false,
 ): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages, model }),
+        body: JSON.stringify({ messages, model, toolsEnabled }),
         signal,
     });
 
@@ -67,12 +71,47 @@ export async function* streamChat(
         const lines = buffer.split("\n");
         buffer = lines.pop()!;
 
+        let currentEvent = "";
         for (const line of lines) {
             const trimmed = line.trim();
+            if (trimmed.startsWith("event: ")) {
+                currentEvent = trimmed.slice(7).trim();
+                continue;
+            }
             if (!trimmed.startsWith("data: ")) continue;
             const data = trimmed.slice(6);
             if (data === "[DONE]") return;
+
             try {
+                if (currentEvent === "clear_content") {
+                    yield { clearContent: true };
+                    currentEvent = "";
+                    continue;
+                }
+                if (currentEvent === "tool_call") {
+                    const parsed = JSON.parse(data);
+                    yield {
+                        toolCall: {
+                            id: parsed.id,
+                            name: parsed.name,
+                            arguments: parsed.arguments,
+                        },
+                    };
+                    currentEvent = "";
+                    continue;
+                }
+                if (currentEvent === "tool_result") {
+                    const parsed = JSON.parse(data);
+                    yield {
+                        toolResult: {
+                            toolCallId: parsed.toolCallId,
+                            content: parsed.content,
+                        },
+                    };
+                    currentEvent = "";
+                    continue;
+                }
+
                 const parsed = JSON.parse(data);
                 const delta = parsed.choices?.[0]?.delta;
                 if (!delta) continue;
@@ -84,6 +123,26 @@ export async function* streamChat(
             } catch {
                 // skip malformed chunks
             }
+            currentEvent = "";
         }
     }
+}
+
+export async function fetchSearchSettings(): Promise<SearchSettings> {
+    const res = await fetch(`${API}/search-settings`);
+    return res.json();
+}
+
+export async function saveSearchSettings(data: {
+    enabled?: boolean;
+    provider?: string;
+    searchApiKey?: string;
+    searxngUrl?: string;
+}): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/search-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return res.json();
 }

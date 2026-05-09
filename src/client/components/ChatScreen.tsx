@@ -17,6 +17,7 @@ import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SendIcon from "@mui/icons-material/Send";
+import SettingsIcon from "@mui/icons-material/Settings";
 import StopIcon from "@mui/icons-material/Stop";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -24,17 +25,26 @@ import {
     connectionAtom,
     defaultConnection,
     type MessageStats,
+    type ToolCall,
+    type ToolResult,
     messagesAtom,
+    searchSettingsAtom,
     streamingAtom,
 } from "../atoms.js";
 import { streamChat } from "../api.js";
+import ChatSettingsDialog from "./ChatSettingsDialog.js";
 
 export default function ChatScreen() {
     const [connection, setConnection] = useAtom(connectionAtom);
     const [messages, setMessages] = useAtom(messagesAtom);
     const [streaming, setStreaming] = useAtom(streamingAtom);
+    const [searchSettings] = useAtom(searchSettingsAtom);
     const [input, setInput] = useState("");
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [expandedThinking, setExpandedThinking] = useState<Set<number>>(
+        new Set(),
+    );
+    const [expandedTools, setExpandedTools] = useState<Set<number>>(
         new Set(),
     );
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -65,22 +75,39 @@ export default function ChatScreen() {
 
         let assistantContent = "";
         let thinkingContent = "";
+        let toolCalls: ToolCall[] = [];
+        let toolResults: ToolResult[] = [];
         const startTime = performance.now();
         let firstTokenTime = 0;
         let tokenCount = 0;
 
+        const toolsEnabled =
+            searchSettings.enabled &&
+            (searchSettings.provider === "searxng"
+                ? searchSettings.searxngUrlSet
+                : searchSettings.apiKeySet);
+
         const setAssistantMessage = (
             content: string,
             thinking: string | undefined,
+            tCalls: ToolCall[],
+            tResults: ToolResult[],
             stats?: MessageStats,
         ) => {
             setMessages([
                 ...updatedMessages,
-                { role: "assistant" as const, content, thinking: thinking || undefined, stats },
+                {
+                    role: "assistant" as const,
+                    content,
+                    thinking: thinking || undefined,
+                    toolCalls: tCalls.length > 0 ? tCalls : undefined,
+                    toolResults: tResults.length > 0 ? tResults : undefined,
+                    stats,
+                },
             ]);
         };
 
-        setAssistantMessage("", undefined);
+        setAssistantMessage("", undefined, [], []);
 
         const abortController = new AbortController();
         abortRef.current = abortController;
@@ -90,7 +117,53 @@ export default function ChatScreen() {
                 updatedMessages,
                 connection.selectedModel,
                 abortController.signal,
+                toolsEnabled,
             )) {
+                if (chunk.clearContent) {
+                    assistantContent = "";
+                    thinkingContent = "";
+                    tokenCount = 0;
+                    continue;
+                }
+                if (chunk.toolCall) {
+                    // Clear preamble content from before the tool call
+                    assistantContent = "";
+                    thinkingContent = "";
+                    tokenCount = 0;
+                    toolCalls = [
+                        ...toolCalls,
+                        {
+                            id: chunk.toolCall.id,
+                            name: chunk.toolCall.name,
+                            arguments: chunk.toolCall.arguments,
+                        },
+                    ];
+                    setAssistantMessage(
+                        assistantContent,
+                        thinkingContent,
+                        toolCalls,
+                        toolResults,
+                    );
+                    scrollToBottom();
+                    continue;
+                }
+                if (chunk.toolResult) {
+                    toolResults = [
+                        ...toolResults,
+                        {
+                            toolCallId: chunk.toolResult.toolCallId,
+                            content: chunk.toolResult.content,
+                        },
+                    ];
+                    setAssistantMessage(
+                        assistantContent,
+                        thinkingContent,
+                        toolCalls,
+                        toolResults,
+                    );
+                    scrollToBottom();
+                    continue;
+                }
                 tokenCount++;
                 if (tokenCount === 1) {
                     firstTokenTime = performance.now();
@@ -103,13 +176,13 @@ export default function ChatScreen() {
                 if (chunk.thinking) {
                     thinkingContent += chunk.thinking;
                 }
-                setAssistantMessage(assistantContent, thinkingContent);
+                setAssistantMessage(assistantContent, thinkingContent, toolCalls, toolResults);
                 scrollToBottom();
             }
         } catch (err) {
             if ((err as Error).name !== "AbortError") {
                 assistantContent += `\n\n**Error: ${(err as Error).message}**`;
-                setAssistantMessage(assistantContent, thinkingContent);
+                setAssistantMessage(assistantContent, thinkingContent, toolCalls, toolResults);
             }
         } finally {
             abortRef.current = null;
@@ -124,7 +197,7 @@ export default function ChatScreen() {
                 ? (tokenCount * 1000) / genTime
                 : 0;
 
-            setAssistantMessage(assistantContent, thinkingContent, {
+            setAssistantMessage(assistantContent, thinkingContent, toolCalls, toolResults, {
                 ppTime: Math.round(ppTime),
                 tokensPerSec: Math.round(tokensPerSec * 10) / 10,
                 tokenCount,
@@ -177,6 +250,13 @@ export default function ChatScreen() {
                     </Typography>
                     <IconButton
                         color="inherit"
+                        onClick={() => setSettingsOpen(true)}
+                        title="Settings"
+                    >
+                        <SettingsIcon />
+                    </IconButton>
+                    <IconButton
+                        color="inherit"
                         onClick={handleClear}
                         title="Clear chat"
                     >
@@ -191,6 +271,11 @@ export default function ChatScreen() {
                     </Button>
                 </Toolbar>
             </AppBar>
+
+            <ChatSettingsDialog
+                open={settingsOpen}
+                onClose={() => setSettingsOpen(false)}
+            />
 
             {streaming && <LinearProgress />}
 
@@ -223,6 +308,81 @@ export default function ChatScreen() {
                             >
                                 {msg.role === "assistant" ? (
                                     <>
+                                        {msg.toolResults && msg.toolResults.length > 0 && (
+                                            <Box sx={{ mb: 1 }}>
+                                                <Box
+                                                    onClick={() =>
+                                                        setExpandedTools(
+                                                            (prev) => {
+                                                                const next = new Set(prev);
+                                                                if (next.has(i)) {
+                                                                    next.delete(i);
+                                                                } else {
+                                                                    next.add(i);
+                                                                }
+                                                                return next;
+                                                            },
+                                                        )
+                                                    }
+                                                    sx={{
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        gap: 0.5,
+                                                        cursor: "pointer",
+                                                        userSelect: "none",
+                                                        color: "grey.400",
+                                                        fontSize: "0.8em",
+                                                        "&:hover": {
+                                                            color: "grey.300",
+                                                        },
+                                                    }}
+                                                >
+                                                    <ExpandMoreIcon
+                                                        sx={{
+                                                            fontSize: "1em",
+                                                            transition: "transform 0.2s",
+                                                            transform: expandedTools.has(i)
+                                                                ? "rotate(180deg)"
+                                                                : "rotate(0deg)",
+                                                        }}
+                                                    />
+                                                    {msg.toolResults.length} search{msg.toolResults.length > 1 ? "es" : ""}
+                                                </Box>
+                                                <Collapse in={expandedTools.has(i)}>
+                                                    <Box
+                                                        sx={{
+                                                            mt: 0.5,
+                                                            p: 1,
+                                                            borderRadius: 1,
+                                                            bgcolor: "grey.900",
+                                                            borderLeft: 2,
+                                                            borderColor: "grey.700",
+                                                            fontSize: "0.85em",
+                                                            color: "grey.400",
+                                                            maxHeight: 200,
+                                                            overflow: "auto",
+                                                        }}
+                                                    >
+                                                        {msg.toolCalls?.map((tc, j) => {
+                                                            let query = "";
+                                                            try {
+                                                                query = JSON.parse(tc.arguments).query ?? "";
+                                                            } catch { /* ignore */ }
+                                                            return (
+                                                                <Box key={tc.id} sx={j > 0 ? { mt: 1, pt: 1, borderTop: 1, borderColor: "grey.800" } : {}}>
+                                                                    <Typography variant="caption" sx={{ color: "grey.500" }}>
+                                                                        Query: {query}
+                                                                    </Typography>
+                                                                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                                                                        {msg.toolResults?.[j]?.content}
+                                                                    </Typography>
+                                                                </Box>
+                                                            );
+                                                        })}
+                                                    </Box>
+                                                </Collapse>
+                                            </Box>
+                                        )}
                                         {msg.thinking && (
                                             <Box sx={{ mb: 1 }}>
                                                 <Box

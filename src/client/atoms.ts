@@ -6,11 +6,24 @@ export interface MessageStats {
     tokenCount: number;
 }
 
+export interface ToolCall {
+    id: string;
+    name: string;
+    arguments: string;
+}
+
+export interface ToolResult {
+    toolCallId: string;
+    content: string;
+}
+
 export interface Message {
-    role: "user" | "assistant";
+    role: "user" | "assistant" | "tool";
     content: string;
     thinking?: string;
     stats?: MessageStats;
+    toolCalls?: ToolCall[];
+    toolResults?: ToolResult[];
 }
 
 export interface ConnectionState {
@@ -19,6 +32,13 @@ export interface ConnectionState {
     models: string[];
     selectedModel: string;
     connected: boolean;
+}
+
+export interface SearchSettings {
+    enabled: boolean;
+    provider: "brave" | "searxng";
+    apiKeySet: boolean;
+    searxngUrlSet: boolean;
 }
 
 export const defaultConnection: ConnectionState = {
@@ -32,3 +52,9 @@ export const defaultConnection: ConnectionState = {
 export const connectionAtom = atom<ConnectionState>(defaultConnection);
 export const messagesAtom = atom<Message[]>([]);
 export const streamingAtom = atom(false);
+export const searchSettingsAtom = atom<SearchSettings>({
+    enabled: false,
+    provider: "brave",
+    apiKeySet: false,
+    searxngUrlSet: false,
+});

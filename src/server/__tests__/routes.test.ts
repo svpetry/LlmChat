@@ -5,11 +5,30 @@ import request from "supertest";
 const mockGetSetting = vi.fn();
 const mockSetSetting = vi.fn();
 const mockGetAllSettings = vi.fn();
+const mockSearchBrave = vi.fn();
+const mockSearchSearxng = vi.fn();
 
 vi.mock("../database.js", () => ({
     getSetting: mockGetSetting,
     setSetting: mockSetSetting,
     getAllSettings: mockGetAllSettings,
+}));
+
+vi.mock("../search.js", () => ({
+    searchBrave: mockSearchBrave,
+    searchSearxng: mockSearchSearxng,
+    webSearchTool: {
+        type: "function",
+        function: {
+            name: "web_search",
+            description: "Search the web",
+            parameters: {
+                type: "object",
+                properties: { query: { type: "string" } },
+                required: ["query"],
+            },
+        },
+    },
 }));
 
 const mockFetch = vi.fn();
@@ -22,6 +41,29 @@ function createApp() {
     app.use(express.json());
     app.use(router);
     return app;
+}
+
+function createStreamResponse(payloads: string[]) {
+    const chunks = payloads.map((payload) => new TextEncoder().encode(payload));
+    let readCount = 0;
+
+    return {
+        ok: true,
+        body: {
+            getReader: () => ({
+                read: vi.fn(async () => {
+                    if (readCount < chunks.length) {
+                        return { done: false, value: chunks[readCount++] };
+                    }
+                    return { done: true, value: undefined };
+                }),
+            }),
+        },
+    };
+}
+
+function sseData(payload: unknown) {
+    return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
 beforeEach(() => {
@@ -236,6 +278,94 @@ describe("POST /api/chat", () => {
                 }),
             }),
         );
+    });
+
+    it("strips channel markup from tool follow-up content", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            if (key === "searchApiKey") return "search-key";
+            return undefined;
+        });
+        mockSearchBrave.mockResolvedValue([
+            {
+                title: "Search result",
+                url: "https://example.com",
+                snippet: "Useful context",
+            },
+        ]);
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_1",
+                                            type: "function",
+                                            function: {
+                                                name: "web_search",
+                                                arguments:
+                                                    '{"query":"test search"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [
+                            { delta: {}, finish_reason: "tool_calls" },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "<|channel>" } },
+                        ],
+                    }),
+                    sseData({
+                        choices: [
+                            { delta: { content: "thought " } },
+                        ],
+                    }),
+                    sseData({
+                        choices: [
+                            { delta: { content: "<channel|>Here" } },
+                        ],
+                    }),
+                    sseData({
+                        choices: [
+                            { delta: { content: " is the answer." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "search for this" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toMatch(/Here[\s\S]* is the answer\./);
+        expect(res.text).not.toContain("<|channel");
+        expect(res.text).not.toContain("<channel|>");
     });
 
     it("forwards upstream API error", async () => {
