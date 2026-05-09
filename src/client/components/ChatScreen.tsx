@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAtom } from "jotai";
 import {
     AppBar,
@@ -45,6 +45,12 @@ export default function ChatScreen() {
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     };
+
+    const focusInput = useCallback(() => {
+        requestAnimationFrame(() => {
+            inputRef.current?.focus({ preventScroll: true });
+        });
+    }, []);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -130,11 +136,9 @@ export default function ChatScreen() {
     useEffect(() => {
         if (!streaming && focusInputAfterStreamRef.current) {
             focusInputAfterStreamRef.current = false;
-            requestAnimationFrame(() => {
-                inputRef.current?.focus({ preventScroll: true });
-            });
+            focusInput();
         }
-    }, [streaming]);
+    }, [focusInput, streaming]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -145,6 +149,11 @@ export default function ChatScreen() {
 
     const handleClear = () => {
         setMessages([]);
+        if (streaming) {
+            focusInputAfterStreamRef.current = true;
+        } else {
+            focusInput();
+        }
     };
 
     const handleDisconnect = () => {
