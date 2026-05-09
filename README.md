@@ -9,8 +9,13 @@ I needed a simple chat client so I could test my local LLM instances. This is th
 - Connect to any OpenAI-compatible API (e.g. llama.cpp, vLLM, LM Studio)
 - Model selection from the server's available models
 - Streaming responses with real-time token display
+- Optional web search tool support via Brave Search or SearXNG
 - Per-message performance stats (prefill time, tokens/sec, token count)
-- Persisted connection settings via SQLite
+- Persisted connection and search settings via SQLite
+
+## Web Search
+
+Enable web search from the in-chat settings dialog. When enabled, the server advertises a `web_search` tool to compatible models and handles tool calls by querying either Brave Search or a SearXNG instance. Search credentials and URLs are stored on the server, so the browser never sends them to the upstream LLM API.
 
 ## Tech Stack
 
