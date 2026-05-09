@@ -93,7 +93,7 @@ export default function ConnectionDialog() {
                     sx={{ display: "flex", flexDirection: "column", gap: 2 }}
                 >
                     <Typography variant="h5" align="center">
-                        LLM Chat
+                        LLM Chat v{__APP_VERSION__}
                     </Typography>
 
                     {error && <Alert severity="error">{error}</Alert>}

@@ -33,11 +33,16 @@ export async function fetchModels(): Promise<{ models: string[] }> {
     return res.json();
 }
 
+export interface StreamChunk {
+    content?: string;
+    thinking?: string;
+}
+
 export async function* streamChat(
     messages: Message[],
     model: string,
     signal?: AbortSignal,
-): AsyncGenerator<string> {
+): AsyncGenerator<StreamChunk> {
     const res = await fetch(`${API}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,8 +74,13 @@ export async function* streamChat(
             if (data === "[DONE]") return;
             try {
                 const parsed = JSON.parse(data);
-                const content = parsed.choices?.[0]?.delta?.content;
-                if (content) yield content;
+                const delta = parsed.choices?.[0]?.delta;
+                if (!delta) continue;
+                const chunk: StreamChunk = {};
+                if (delta.content) chunk.content = delta.content;
+                const thinking = delta.reasoning_content ?? delta.thinking;
+                if (thinking) chunk.thinking = thinking;
+                if (chunk.content || chunk.thinking) yield chunk;
             } catch {
                 // skip malformed chunks
             }

@@ -41,6 +41,7 @@ describe("GET /api/settings", () => {
         expect(res.body).toEqual({
             baseUrl: "http://example.com/v1",
             apiKey: "key123",
+            selectedModel: "",
         });
     });
 
@@ -49,7 +50,7 @@ describe("GET /api/settings", () => {
 
         const res = await request(createApp()).get("/api/settings");
 
-        expect(res.body).toEqual({ baseUrl: "", apiKey: "" });
+        expect(res.body).toEqual({ baseUrl: "", apiKey: "", selectedModel: "" });
     });
 });
 

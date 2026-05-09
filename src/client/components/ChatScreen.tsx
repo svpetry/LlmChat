@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAtom } from "jotai";
 import {
     AppBar,
     Box,
     Button,
+    Collapse,
     Container,
     IconButton,
     LinearProgress,
@@ -13,6 +14,7 @@ import {
     Typography,
 } from "@mui/material";
 import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
@@ -32,8 +34,13 @@ export default function ChatScreen() {
     const [messages, setMessages] = useAtom(messagesAtom);
     const [streaming, setStreaming] = useAtom(streamingAtom);
     const [input, setInput] = useState("");
+    const [expandedThinking, setExpandedThinking] = useState<Set<number>>(
+        new Set(),
+    );
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
+    const inputRef = useRef<HTMLTextAreaElement>(null);
+    const focusInputAfterStreamRef = useRef(false);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -43,6 +50,7 @@ export default function ChatScreen() {
         const text = input.trim();
         if (!text || streaming) return;
 
+        focusInputAfterStreamRef.current = true;
         const userMessage = { role: "user" as const, content: text };
         const updatedMessages = [...messages, userMessage];
         setMessages(updatedMessages);
@@ -50,21 +58,23 @@ export default function ChatScreen() {
         setStreaming(true);
 
         let assistantContent = "";
+        let thinkingContent = "";
         const startTime = performance.now();
         let firstTokenTime = 0;
         let tokenCount = 0;
 
         const setAssistantMessage = (
             content: string,
+            thinking: string | undefined,
             stats?: MessageStats,
         ) => {
             setMessages([
                 ...updatedMessages,
-                { role: "assistant" as const, content, stats },
+                { role: "assistant" as const, content, thinking: thinking || undefined, stats },
             ]);
         };
 
-        setAssistantMessage("");
+        setAssistantMessage("", undefined);
 
         const abortController = new AbortController();
         abortRef.current = abortController;
@@ -79,16 +89,21 @@ export default function ChatScreen() {
                 if (tokenCount === 1) {
                     firstTokenTime = performance.now();
                 }
-                const c =
-                    tokenCount === 1 ? chunk.replace(/^\n+/, "") : chunk;
-                assistantContent += c;
-                setAssistantMessage(assistantContent);
+                if (chunk.content) {
+                    const c =
+                        tokenCount === 1 ? chunk.content.replace(/^\n+/, "") : chunk.content;
+                    assistantContent += c;
+                }
+                if (chunk.thinking) {
+                    thinkingContent += chunk.thinking;
+                }
+                setAssistantMessage(assistantContent, thinkingContent);
                 scrollToBottom();
             }
         } catch (err) {
             if ((err as Error).name !== "AbortError") {
                 assistantContent += `\n\n**Error: ${(err as Error).message}**`;
-                setAssistantMessage(assistantContent);
+                setAssistantMessage(assistantContent, thinkingContent);
             }
         } finally {
             abortRef.current = null;
@@ -103,7 +118,7 @@ export default function ChatScreen() {
                 ? (tokenCount * 1000) / genTime
                 : 0;
 
-            setAssistantMessage(assistantContent, {
+            setAssistantMessage(assistantContent, thinkingContent, {
                 ppTime: Math.round(ppTime),
                 tokensPerSec: Math.round(tokensPerSec * 10) / 10,
                 tokenCount,
@@ -111,6 +126,15 @@ export default function ChatScreen() {
             setStreaming(false);
         }
     };
+
+    useEffect(() => {
+        if (!streaming && focusInputAfterStreamRef.current) {
+            focusInputAfterStreamRef.current = false;
+            requestAnimationFrame(() => {
+                inputRef.current?.focus({ preventScroll: true });
+            });
+        }
+    }, [streaming]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -133,7 +157,14 @@ export default function ChatScreen() {
             <AppBar position="static">
                 <Toolbar>
                     <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                        {connection.selectedModel}
+                        {connection.selectedModel}{" "}
+                        <Typography
+                            component="span"
+                            variant="caption"
+                            sx={{ opacity: 0.6 }}
+                        >
+                            v{__APP_VERSION__}
+                        </Typography>
                     </Typography>
                     <IconButton
                         color="inherit"
@@ -182,7 +213,85 @@ export default function ChatScreen() {
                                 }}
                             >
                                 {msg.role === "assistant" ? (
-                                    <Box
+                                    <>
+                                        {msg.thinking && (
+                                            <Box sx={{ mb: 1 }}>
+                                                <Box
+                                                    onClick={() =>
+                                                        setExpandedThinking(
+                                                            (prev) => {
+                                                                const next =
+                                                                    new Set(
+                                                                        prev,
+                                                                    );
+                                                                if (next.has(i)) {
+                                                                    next.delete(
+                                                                        i,
+                                                                    );
+                                                                } else {
+                                                                    next.add(i);
+                                                                }
+                                                                return next;
+                                                            },
+                                                        )
+                                                    }
+                                                    sx={{
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        gap: 0.5,
+                                                        cursor: "pointer",
+                                                        userSelect: "none",
+                                                        color: "grey.400",
+                                                        fontSize: "0.8em",
+                                                        "&:hover": {
+                                                            color: "grey.300",
+                                                        },
+                                                    }}
+                                                >
+                                                    <ExpandMoreIcon
+                                                        sx={{
+                                                            fontSize: "1em",
+                                                            transition:
+                                                                "transform 0.2s",
+                                                            transform:
+                                                                expandedThinking.has(
+                                                                    i,
+                                                                )
+                                                                    ? "rotate(180deg)"
+                                                                    : "rotate(0deg)",
+                                                        }}
+                                                    />
+                                                    Thinking...
+                                                </Box>
+                                                <Collapse
+                                                    in={expandedThinking.has(
+                                                        i,
+                                                    )}
+                                                >
+                                                    <Box
+                                                        sx={{
+                                                            mt: 0.5,
+                                                            p: 1,
+                                                            borderRadius: 1,
+                                                            bgcolor:
+                                                                "grey.900",
+                                                            borderLeft: 2,
+                                                            borderColor:
+                                                                "grey.700",
+                                                            fontSize: "0.85em",
+                                                            color: "grey.400",
+                                                            whiteSpace:
+                                                                "pre-wrap",
+                                                            maxHeight: 300,
+                                                            overflow: "auto",
+                                                        }}
+                                                    >
+                                                        {msg.thinking}
+                                                    </Box>
+                                                </Collapse>
+                                            </Box>
+                                        )}
+                                        <Box
                                         className="markdown-body"
                                         sx={{
                                             "& p": { mt: 0, mb: 1 },
@@ -232,6 +341,7 @@ export default function ChatScreen() {
                                             {msg.content || "..."}
                                         </ReactMarkdown>
                                     </Box>
+                                    </>
                                 ) : (
                                     <Typography
                                         variant="body1"
@@ -277,6 +387,7 @@ export default function ChatScreen() {
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={handleKeyDown}
                         disabled={streaming}
+                        inputRef={inputRef}
                     />
                     {streaming ? (
                         <Button
