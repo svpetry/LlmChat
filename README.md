@@ -2,6 +2,8 @@
 
 A web-based chat client for OpenAI-compatible LLM APIs. Connect to any server that exposes the `/v1/models` and `/v1/chat/completions` endpoints and chat with streamed responses.
 
+I needed a simple chat client so I could test my local LLM instances. This is the result.
+
 ## Features
 
 - Connect to any OpenAI-compatible API (e.g. llama.cpp, vLLM, LM Studio)
