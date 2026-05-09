@@ -21,6 +21,8 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import StopIcon from "@mui/icons-material/Stop";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import {
     connectionAtom,
     defaultConnection,
@@ -496,13 +498,31 @@ export default function ChatScreen() {
                                                                 "grey.700",
                                                             fontSize: "0.85em",
                                                             color: "grey.400",
-                                                            whiteSpace:
-                                                                "pre-wrap",
                                                             maxHeight: 300,
                                                             overflow: "auto",
+                                                            "& p": { mt: 0, mb: 0.5 },
+                                                            "& ul, & ol": { mt: 0, mb: 0.5, pl: 2 },
+                                                            "& pre": {
+                                                                bgcolor: "grey.950",
+                                                                p: 1,
+                                                                borderRadius: 1,
+                                                                overflow: "auto",
+                                                                fontSize: "0.9em",
+                                                            },
+                                                            "& code": {
+                                                                fontFamily: "monospace",
+                                                                fontSize: "0.9em",
+                                                            },
+                                                            "& :not(pre) > code": {
+                                                                bgcolor: "grey.950",
+                                                                px: 0.5,
+                                                                borderRadius: 0.5,
+                                                            },
                                                         }}
                                                     >
-                                                        {msg.thinking}
+                                                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                                            {msg.thinking}
+                                                        </ReactMarkdown>
                                                     </Box>
                                                 </Collapse>
                                             </Box>
@@ -553,7 +573,7 @@ export default function ChatScreen() {
                                             },
                                         }}
                                     >
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
                                             {msg.content || "..."}
                                         </ReactMarkdown>
                                     </Box>
