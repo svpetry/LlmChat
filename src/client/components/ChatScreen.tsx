@@ -25,20 +25,31 @@ import {
     connectionAtom,
     defaultConnection,
     type MessageStats,
+    type SearchSettings,
     type ToolCall,
     type ToolResult,
     messagesAtom,
     searchSettingsAtom,
     streamingAtom,
 } from "../atoms.js";
-import { streamChat } from "../api.js";
+import { fetchSearchSettings, streamChat } from "../api.js";
 import ChatSettingsDialog from "./ChatSettingsDialog.js";
+
+function canUseSearchTools(settings: SearchSettings) {
+    return (
+        settings.enabled &&
+        (settings.provider === "searxng"
+            ? settings.searxngUrlSet
+            : settings.apiKeySet)
+    );
+}
 
 export default function ChatScreen() {
     const [connection, setConnection] = useAtom(connectionAtom);
     const [messages, setMessages] = useAtom(messagesAtom);
     const [streaming, setStreaming] = useAtom(streamingAtom);
-    const [searchSettings] = useAtom(searchSettingsAtom);
+    const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
+    const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
     const [input, setInput] = useState("");
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [expandedThinking, setExpandedThinking] = useState<Set<number>>(
@@ -51,6 +62,9 @@ export default function ChatScreen() {
     const abortRef = useRef<AbortController | null>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const focusInputAfterStreamRef = useRef(false);
+    const searchSettingsPromiseRef = useRef<Promise<SearchSettings> | null>(
+        null,
+    );
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -61,6 +75,28 @@ export default function ChatScreen() {
             inputRef.current?.focus({ preventScroll: true });
         });
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+        const load =
+            searchSettingsPromiseRef.current ?? fetchSearchSettings();
+        searchSettingsPromiseRef.current = load;
+
+        load.then((settings) => {
+            if (cancelled) return;
+            setSearchSettings(settings);
+        }).catch(() => {
+            // Leave search disabled if settings cannot be loaded.
+        }).finally(() => {
+            if (cancelled) return;
+            setSearchSettingsLoaded(true);
+            searchSettingsPromiseRef.current = null;
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [setSearchSettings]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -81,11 +117,22 @@ export default function ChatScreen() {
         let firstTokenTime = 0;
         let tokenCount = 0;
 
-        const toolsEnabled =
-            searchSettings.enabled &&
-            (searchSettings.provider === "searxng"
-                ? searchSettings.searxngUrlSet
-                : searchSettings.apiKeySet);
+        let settingsForSend = searchSettings;
+        if (!searchSettingsLoaded) {
+            try {
+                const load =
+                    searchSettingsPromiseRef.current ?? fetchSearchSettings();
+                searchSettingsPromiseRef.current = load;
+                settingsForSend = await load;
+                setSearchSettings(settingsForSend);
+                setSearchSettingsLoaded(true);
+                searchSettingsPromiseRef.current = null;
+            } catch {
+                setSearchSettingsLoaded(true);
+                searchSettingsPromiseRef.current = null;
+            }
+        }
+        const toolsEnabled = canUseSearchTools(settingsForSend);
 
         const setAssistantMessage = (
             content: string,
