@@ -347,7 +347,7 @@ export default function ChatScreen() {
                                     px: 2,
                                     pt: 0.5,
                                     pb: 1,
-                                    maxWidth: "80%",
+                                    width: "80%",
                                     bgcolor:
                                         msg.role === "user"
                                             ? "primary.main"
@@ -433,7 +433,7 @@ export default function ChatScreen() {
                                             </Box>
                                         )}
                                         {msg.thinking && (
-                                            <Box sx={{ mb: 1 }}>
+                                            <Box sx={{ mb: 1, width: "100%" }}>
                                                 <Box
                                                     onClick={() =>
                                                         setExpandedThinking(
@@ -482,12 +482,30 @@ export default function ChatScreen() {
                                                     Thinking...
                                                 </Box>
                                                 <Collapse
-                                                    in={expandedThinking.has(
-                                                        i,
-                                                    )}
+                                                    in={expandedThinking.has(i)}
+                                                    sx={{
+                                                        width: "100%",
+                                                        minWidth: 0,
+                                                        "& .MuiCollapse-wrapper":
+                                                            {
+                                                                display:
+                                                                    "block",
+                                                                width: "100%",
+                                                                minWidth: 0,
+                                                            },
+                                                        "& .MuiCollapse-wrapperInner":
+                                                            {
+                                                                width: "100%",
+                                                                minWidth: 0,
+                                                            },
+                                                    }}
                                                 >
                                                     <Box
                                                         sx={{
+                                                            boxSizing:
+                                                                "border-box",
+                                                            width: "100%",
+                                                            minWidth: 0,
                                                             mt: 0.5,
                                                             p: 1,
                                                             borderRadius: 1,
