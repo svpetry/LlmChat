@@ -13,7 +13,7 @@ import {
     Toolbar,
     Typography,
 } from "@mui/material";
-import DeleteSweepIcon from "@mui/icons-material/DeleteSweep";
+import AddIcon from "@mui/icons-material/Add";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SendIcon from "@mui/icons-material/Send";
@@ -33,9 +33,21 @@ import {
     messagesAtom,
     searchSettingsAtom,
     streamingAtom,
+    activeChatIdAtom,
+    chatListAtom,
 } from "../atoms.js";
-import { fetchSearchSettings, streamChat } from "../api.js";
+import {
+    fetchSearchSettings,
+    streamChat,
+    fetchChats,
+    createChatApi,
+    deleteChatApi,
+    fetchMessages,
+    saveMessage,
+    generateChatTitle,
+} from "../api.js";
 import ChatSettingsDialog from "./ChatSettingsDialog.js";
+import ChatSidebar from "./ChatSidebar.js";
 
 function canUseSearchTools(settings: SearchSettings) {
     return (
@@ -51,6 +63,8 @@ export default function ChatScreen() {
     const [messages, setMessages] = useAtom(messagesAtom);
     const [streaming, setStreaming] = useAtom(streamingAtom);
     const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
+    const [activeChatId, setActiveChatId] = useAtom(activeChatIdAtom);
+    const [chatList, setChatList] = useAtom(chatListAtom);
     const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
     const [input, setInput] = useState("");
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -67,6 +81,7 @@ export default function ChatScreen() {
     const searchSettingsPromiseRef = useRef<Promise<SearchSettings> | null>(
         null,
     );
+    const initializedRef = useRef(false);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -78,6 +93,7 @@ export default function ChatScreen() {
         });
     }, []);
 
+    // Load search settings
     useEffect(() => {
         let cancelled = false;
         const load =
@@ -100,16 +116,87 @@ export default function ChatScreen() {
         };
     }, [setSearchSettings]);
 
+    // Load chat list and initialize on mount
+    useEffect(() => {
+        if (initializedRef.current) return;
+        initializedRef.current = true;
+
+        const cancelled = false;
+        (async () => {
+            try {
+                const chats = await fetchChats();
+                if (cancelled) return;
+                setChatList(chats);
+                if (chats.length > 0) {
+                    setActiveChatId(chats[0].id);
+                    const msgs = await fetchMessages(chats[0].id);
+                    if (cancelled) return;
+                    setMessages(msgs);
+                } else {
+                    await handleNewChat();
+                }
+            } catch {
+                // If loading fails, start fresh
+                if (!cancelled) await handleNewChat();
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const handleNewChat = async () => {
+        const id = crypto.randomUUID();
+        const chat = await createChatApi(id, connection.selectedModel);
+        setChatList((prev) => [chat, ...prev]);
+        setActiveChatId(id);
+        setMessages([]);
+        focusInputAfterStreamRef.current = true;
+    };
+
+    const handleSelectChat = async (chatId: string) => {
+        if (chatId === activeChatId) return;
+        if (streaming) {
+            abortRef.current?.abort();
+        }
+        setActiveChatId(chatId);
+        const msgs = await fetchMessages(chatId);
+        setMessages(msgs);
+        setExpandedThinking(new Set());
+        setExpandedTools(new Set());
+    };
+
+    const handleDeleteChat = async (chatId: string) => {
+        await deleteChatApi(chatId);
+        setChatList((prev) => {
+            const updated = prev.filter((c) => c.id !== chatId);
+            if (chatId === activeChatId) {
+                if (updated.length > 0) {
+                    const nextChat = updated[0];
+                    setActiveChatId(nextChat.id);
+                    fetchMessages(nextChat.id).then(setMessages);
+                } else {
+                    handleNewChat();
+                }
+            }
+            return updated;
+        });
+    };
+
     const handleSend = async () => {
         const text = input.trim();
-        if (!text || streaming) return;
+        if (!text || streaming || !activeChatId) return;
 
         focusInputAfterStreamRef.current = true;
+        const userMsgId = crypto.randomUUID();
         const userMessage = { role: "user" as const, content: text };
         const updatedMessages = [...messages, userMessage];
         setMessages(updatedMessages);
         setInput("");
         setStreaming(true);
+
+        // Persist user message
+        saveMessage(activeChatId, { id: userMsgId, ...userMessage }).catch(
+            () => {},
+        );
 
         let assistantContent = "";
         let thinkingContent = "";
@@ -175,7 +262,6 @@ export default function ChatScreen() {
                     continue;
                 }
                 if (chunk.toolCall) {
-                    // Clear preamble content from before the tool call
                     assistantContent = "";
                     thinkingContent = "";
                     tokenCount = 0;
@@ -246,12 +332,44 @@ export default function ChatScreen() {
                 ? (tokenCount * 1000) / genTime
                 : 0;
 
-            setAssistantMessage(assistantContent, thinkingContent, toolCalls, toolResults, {
+            const finalStats = {
                 ppTime: Math.round(ppTime),
                 tokensPerSec: Math.round(tokensPerSec * 10) / 10,
                 tokenCount,
-            });
+            };
+
+            setAssistantMessage(assistantContent, thinkingContent, toolCalls, toolResults, finalStats);
             setStreaming(false);
+
+            // Persist assistant message
+            const assistantMsgId = crypto.randomUUID();
+            const assistantMsg = {
+                id: assistantMsgId,
+                role: "assistant" as const,
+                content: assistantContent,
+                thinking: thinkingContent || undefined,
+                toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+                toolResults: toolResults.length > 0 ? toolResults : undefined,
+                stats: finalStats,
+            };
+            if (activeChatId) {
+                saveMessage(activeChatId, assistantMsg).catch(() => {});
+
+                // Auto-generate title after first exchange
+                const currentChat = chatList.find((c) => c.id === activeChatId);
+                if (currentChat?.title === "New Chat" && updatedMessages.length === 1) {
+                    const chatId = activeChatId;
+                    generateChatTitle(chatId)
+                        .then(({ title }) => {
+                            setChatList((prev) =>
+                                prev.map((c) =>
+                                    c.id === chatId ? { ...c, title } : c,
+                                ),
+                            );
+                        })
+                        .catch(() => {});
+                }
+            }
         }
     };
 
@@ -269,401 +387,404 @@ export default function ChatScreen() {
         }
     };
 
-    const handleClear = () => {
-        setMessages([]);
-        if (streaming) {
-            focusInputAfterStreamRef.current = true;
-        } else {
-            focusInput();
-        }
-    };
-
     const handleDisconnect = () => {
         setMessages([]);
+        setActiveChatId(null);
+        setChatList([]);
         setConnection({ ...defaultConnection });
     };
 
     return (
-        <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-            <AppBar position="static">
-                <Toolbar>
-                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                        {connection.selectedModel}{" "}
-                        <Typography
-                            component="span"
-                            variant="caption"
-                            sx={{ opacity: 0.6 }}
-                        >
-                            v{__APP_VERSION__}
-                        </Typography>
-                    </Typography>
-                    <IconButton
-                        color="inherit"
-                        onClick={() => setSettingsOpen(true)}
-                        title="Settings"
-                    >
-                        <SettingsIcon />
-                    </IconButton>
-                    <IconButton
-                        color="inherit"
-                        onClick={handleClear}
-                        title="Clear chat"
-                    >
-                        <DeleteSweepIcon />
-                    </IconButton>
-                    <Button
-                        color="inherit"
-                        startIcon={<LogoutIcon />}
-                        onClick={handleDisconnect}
-                    >
-                        Disconnect
-                    </Button>
-                </Toolbar>
-            </AppBar>
-
-            <ChatSettingsDialog
-                open={settingsOpen}
-                onClose={() => setSettingsOpen(false)}
+        <Box sx={{ display: "flex", flexDirection: "row", height: "100vh" }}>
+            <ChatSidebar
+                chats={chatList}
+                activeChatId={activeChatId}
+                onSelectChat={handleSelectChat}
+                onNewChat={handleNewChat}
+                onDeleteChat={handleDeleteChat}
             />
 
-            {streaming && <LinearProgress />}
-
-            <Box sx={{ flexGrow: 1, overflow: "auto", py: 2 }}>
-                <Container maxWidth="md">
-                    {messages.map((msg, i) => (
-                        <Box
-                            key={i}
-                            sx={{
-                                display: "flex",
-                                justifyContent:
-                                    msg.role === "user"
-                                        ? "flex-end"
-                                        : "flex-start",
-                                mb: 2,
-                            }}
+            <Box sx={{ display: "flex", flexDirection: "column", flexGrow: 1, minWidth: 0 }}>
+                <AppBar position="static">
+                    <Toolbar>
+                        <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                            {connection.selectedModel}{" "}
+                            <Typography
+                                component="span"
+                                variant="caption"
+                                sx={{ opacity: 0.6 }}
+                            >
+                                v{__APP_VERSION__}
+                            </Typography>
+                        </Typography>
+                        <IconButton
+                            color="inherit"
+                            onClick={handleNewChat}
+                            title="New chat"
                         >
-                            <Paper
+                            <AddIcon />
+                        </IconButton>
+                        <IconButton
+                            color="inherit"
+                            onClick={() => setSettingsOpen(true)}
+                            title="Settings"
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                        <Button
+                            color="inherit"
+                            startIcon={<LogoutIcon />}
+                            onClick={handleDisconnect}
+                        >
+                            Disconnect
+                        </Button>
+                    </Toolbar>
+                </AppBar>
+
+                <ChatSettingsDialog
+                    open={settingsOpen}
+                    onClose={() => setSettingsOpen(false)}
+                />
+
+                {streaming && <LinearProgress />}
+
+                <Box sx={{ flexGrow: 1, overflow: "auto", py: 2 }}>
+                    <Container maxWidth="md">
+                        {messages.map((msg, i) => (
+                            <Box
+                                key={i}
                                 sx={{
-                                    px: 2,
-                                    pt: 0.5,
-                                    pb: 1,
-                                    width: "80%",
-                                    bgcolor:
+                                    display: "flex",
+                                    justifyContent:
                                         msg.role === "user"
-                                            ? "primary.main"
-                                            : "grey.800",
-                                    wordBreak: "break-word",
+                                            ? "flex-end"
+                                            : "flex-start",
+                                    mb: 2,
                                 }}
                             >
-                                {msg.role === "assistant" ? (
-                                    <>
-                                        {msg.toolResults && msg.toolResults.length > 0 && (
-                                            <Box sx={{ mb: 1 }}>
-                                                <Box
-                                                    onClick={() =>
-                                                        setExpandedTools(
-                                                            (prev) => {
-                                                                const next = new Set(prev);
-                                                                if (next.has(i)) {
-                                                                    next.delete(i);
-                                                                } else {
-                                                                    next.add(i);
-                                                                }
-                                                                return next;
-                                                            },
-                                                        )
-                                                    }
-                                                    sx={{
-                                                        display: "flex",
-                                                        alignItems: "center",
-                                                        gap: 0.5,
-                                                        cursor: "pointer",
-                                                        userSelect: "none",
-                                                        color: "grey.400",
-                                                        fontSize: "0.8em",
-                                                        "&:hover": {
-                                                            color: "grey.300",
-                                                        },
-                                                    }}
-                                                >
-                                                    <ExpandMoreIcon
-                                                        sx={{
-                                                            fontSize: "1em",
-                                                            transition: "transform 0.2s",
-                                                            transform: expandedTools.has(i)
-                                                                ? "rotate(180deg)"
-                                                                : "rotate(0deg)",
-                                                        }}
-                                                    />
-                                                    {msg.toolResults.length} search{msg.toolResults.length > 1 ? "es" : ""}
-                                                </Box>
-                                                <Collapse in={expandedTools.has(i)}>
+                                <Paper
+                                    sx={{
+                                        px: 2,
+                                        pt: 0.5,
+                                        pb: 1,
+                                        width: "80%",
+                                        bgcolor:
+                                            msg.role === "user"
+                                                ? "primary.main"
+                                                : "grey.800",
+                                        wordBreak: "break-word",
+                                    }}
+                                >
+                                    {msg.role === "assistant" ? (
+                                        <>
+                                            {msg.toolResults && msg.toolResults.length > 0 && (
+                                                <Box sx={{ mb: 1 }}>
                                                     <Box
+                                                        onClick={() =>
+                                                            setExpandedTools(
+                                                                (prev) => {
+                                                                    const next = new Set(prev);
+                                                                    if (next.has(i)) {
+                                                                        next.delete(i);
+                                                                    } else {
+                                                                        next.add(i);
+                                                                    }
+                                                                    return next;
+                                                                },
+                                                            )
+                                                        }
                                                         sx={{
-                                                            mt: 0.5,
-                                                            p: 1,
-                                                            borderRadius: 1,
-                                                            bgcolor: "grey.900",
-                                                            borderLeft: 2,
-                                                            borderColor: "grey.700",
-                                                            fontSize: "0.85em",
+                                                            display: "flex",
+                                                            alignItems: "center",
+                                                            gap: 0.5,
+                                                            cursor: "pointer",
+                                                            userSelect: "none",
                                                             color: "grey.400",
-                                                            maxHeight: 200,
-                                                            overflow: "auto",
+                                                            fontSize: "0.8em",
+                                                            "&:hover": {
+                                                                color: "grey.300",
+                                                            },
                                                         }}
                                                     >
-                                                        {msg.toolCalls?.map((tc, j) => {
-                                                            let query = "";
-                                                            try {
-                                                                query = JSON.parse(tc.arguments).query ?? "";
-                                                            } catch { /* ignore */ }
-                                                            return (
-                                                                <Box key={tc.id} sx={j > 0 ? { mt: 1, pt: 1, borderTop: 1, borderColor: "grey.800" } : {}}>
-                                                                    <Typography variant="caption" sx={{ color: "grey.500" }}>
-                                                                        Query: {query}
-                                                                    </Typography>
-                                                                    <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                                                                        {msg.toolResults?.[j]?.content}
-                                                                    </Typography>
-                                                                </Box>
-                                                            );
-                                                        })}
-                                                    </Box>
-                                                </Collapse>
-                                            </Box>
-                                        )}
-                                        {msg.thinking && (
-                                            <Box sx={{ mb: 1, width: "100%" }}>
-                                                <Box
-                                                    onClick={() =>
-                                                        setExpandedThinking(
-                                                            (prev) => {
-                                                                const next =
-                                                                    new Set(
-                                                                        prev,
-                                                                    );
-                                                                if (next.has(i)) {
-                                                                    next.delete(
-                                                                        i,
-                                                                    );
-                                                                } else {
-                                                                    next.add(i);
-                                                                }
-                                                                return next;
-                                                            },
-                                                        )
-                                                    }
-                                                    sx={{
-                                                        display: "flex",
-                                                        alignItems: "center",
-                                                        gap: 0.5,
-                                                        cursor: "pointer",
-                                                        userSelect: "none",
-                                                        color: "grey.400",
-                                                        fontSize: "0.8em",
-                                                        "&:hover": {
-                                                            color: "grey.300",
-                                                        },
-                                                    }}
-                                                >
-                                                    <ExpandMoreIcon
-                                                        sx={{
-                                                            fontSize: "1em",
-                                                            transition:
-                                                                "transform 0.2s",
-                                                            transform:
-                                                                expandedThinking.has(
-                                                                    i,
-                                                                )
+                                                        <ExpandMoreIcon
+                                                            sx={{
+                                                                fontSize: "1em",
+                                                                transition: "transform 0.2s",
+                                                                transform: expandedTools.has(i)
                                                                     ? "rotate(180deg)"
                                                                     : "rotate(0deg)",
-                                                        }}
-                                                    />
-                                                    Thinking...
-                                                </Box>
-                                                <Collapse
-                                                    in={expandedThinking.has(i)}
-                                                    sx={{
-                                                        width: "100%",
-                                                        minWidth: 0,
-                                                        "& .MuiCollapse-wrapper":
-                                                            {
-                                                                display:
-                                                                    "block",
-                                                                width: "100%",
-                                                                minWidth: 0,
-                                                            },
-                                                        "& .MuiCollapse-wrapperInner":
-                                                            {
-                                                                width: "100%",
-                                                                minWidth: 0,
-                                                            },
-                                                    }}
-                                                >
-                                                    <Box
-                                                        sx={{
-                                                            boxSizing:
-                                                                "border-box",
-                                                            width: "100%",
-                                                            minWidth: 0,
-                                                            mt: 0.5,
-                                                            p: 1,
-                                                            borderRadius: 1,
-                                                            bgcolor:
-                                                                "grey.900",
-                                                            borderLeft: 2,
-                                                            borderColor:
-                                                                "grey.700",
-                                                            fontSize: "0.85em",
-                                                            color: "grey.400",
-                                                            maxHeight: 300,
-                                                            overflow: "auto",
-                                                            "& p": { mt: 0, mb: 0.5 },
-                                                            "& ul, & ol": { mt: 0, mb: 0.5, pl: 2 },
-                                                            "& pre": {
-                                                                bgcolor: "grey.950",
+                                                            }}
+                                                        />
+                                                        {msg.toolResults.length} search{msg.toolResults.length > 1 ? "es" : ""}
+                                                    </Box>
+                                                    <Collapse in={expandedTools.has(i)}>
+                                                        <Box
+                                                            sx={{
+                                                                mt: 0.5,
                                                                 p: 1,
                                                                 borderRadius: 1,
+                                                                bgcolor: "grey.900",
+                                                                borderLeft: 2,
+                                                                borderColor: "grey.700",
+                                                                fontSize: "0.85em",
+                                                                color: "grey.400",
+                                                                maxHeight: 200,
                                                                 overflow: "auto",
-                                                                fontSize: "0.9em",
-                                                            },
-                                                            "& code": {
-                                                                fontFamily: "monospace",
-                                                                fontSize: "0.9em",
-                                                            },
-                                                            "& :not(pre) > code": {
-                                                                bgcolor: "grey.950",
-                                                                px: 0.5,
-                                                                borderRadius: 0.5,
+                                                            }}
+                                                        >
+                                                            {msg.toolCalls?.map((tc, j) => {
+                                                                let query = "";
+                                                                try {
+                                                                    query = JSON.parse(tc.arguments).query ?? "";
+                                                                } catch { /* ignore */ }
+                                                                return (
+                                                                    <Box key={tc.id} sx={j > 0 ? { mt: 1, pt: 1, borderTop: 1, borderColor: "grey.800" } : {}}>
+                                                                        <Typography variant="caption" sx={{ color: "grey.500" }}>
+                                                                            Query: {query}
+                                                                        </Typography>
+                                                                        <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                                                                            {msg.toolResults?.[j]?.content}
+                                                                        </Typography>
+                                                                    </Box>
+                                                                );
+                                                            })}
+                                                        </Box>
+                                                    </Collapse>
+                                                </Box>
+                                            )}
+                                            {msg.thinking && (
+                                                <Box sx={{ mb: 1, width: "100%" }}>
+                                                    <Box
+                                                        onClick={() =>
+                                                            setExpandedThinking(
+                                                                (prev) => {
+                                                                    const next =
+                                                                        new Set(
+                                                                            prev,
+                                                                        );
+                                                                    if (next.has(i)) {
+                                                                        next.delete(
+                                                                            i,
+                                                                        );
+                                                                    } else {
+                                                                        next.add(i);
+                                                                    }
+                                                                    return next;
+                                                                },
+                                                            )
+                                                        }
+                                                        sx={{
+                                                            display: "flex",
+                                                            alignItems: "center",
+                                                            gap: 0.5,
+                                                            cursor: "pointer",
+                                                            userSelect: "none",
+                                                            color: "grey.400",
+                                                            fontSize: "0.8em",
+                                                            "&:hover": {
+                                                                color: "grey.300",
                                                             },
                                                         }}
                                                     >
-                                                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                                            {msg.thinking}
-                                                        </ReactMarkdown>
+                                                        <ExpandMoreIcon
+                                                            sx={{
+                                                                fontSize: "1em",
+                                                                transition:
+                                                                    "transform 0.2s",
+                                                                transform:
+                                                                    expandedThinking.has(
+                                                                        i,
+                                                                    )
+                                                                        ? "rotate(180deg)"
+                                                                        : "rotate(0deg)",
+                                                            }}
+                                                        />
+                                                        Thinking...
                                                     </Box>
-                                                </Collapse>
-                                            </Box>
-                                        )}
-                                        <Box
-                                        className="markdown-body"
-                                        sx={{
-                                            "& p": { mt: 0, mb: 1 },
-                                            "& ul, & ol": { mt: 0, mb: 1, pl: 2 },
-                                            "& li": { mb: 0.25 },
-                                            "& h1, & h2, & h3, & h4, & h5, & h6": {
-                                                mt: 1, mb: 0.5,
-                                            },
-                                            "& pre": {
-                                                bgcolor: "grey.900",
-                                                p: 1.5,
-                                                borderRadius: 1,
-                                                overflow: "auto",
-                                                fontSize: "0.85em",
-                                            },
-                                            "& code": {
-                                                fontFamily: "monospace",
-                                                fontSize: "0.9em",
-                                            },
-                                            "& :not(pre) > code": {
-                                                bgcolor: "grey.900",
-                                                px: 0.5,
-                                                borderRadius: 0.5,
-                                            },
-                                            "& blockquote": {
-                                                borderLeft: 3,
-                                                borderColor: "grey.600",
-                                                pl: 2,
-                                                ml: 0,
-                                            },
-                                            "& table": {
-                                                borderCollapse: "collapse",
-                                                width: "100%",
-                                            },
-                                            "& th, & td": {
-                                                border: 1,
-                                                borderColor: "grey.700",
-                                                px: 1,
-                                                py: 0.5,
-                                            },
-                                            "& hr": {
-                                                borderColor: "grey.700",
-                                            },
-                                        }}
-                                    >
-                                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                            {msg.content || "..."}
-                                        </ReactMarkdown>
-                                    </Box>
-                                    </>
-                                ) : (
-                                    <Typography
-                                        variant="body1"
-                                        sx={{ whiteSpace: "pre-wrap" }}
-                                    >
-                                        {msg.content}
-                                    </Typography>
-                                )}
-                                {msg.stats && (
-                                    <Typography
-                                        variant="caption"
-                                        sx={{
-                                            color: "grey.500",
-                                            mt: 0.5,
-                                            display: "block",
-                                        }}
-                                    >
-                                        PP:{" "}
-                                        {msg.stats.ppTime >= 1000
-                                            ? `${(msg.stats.ppTime / 1000).toFixed(1)}s`
-                                            : `${msg.stats.ppTime}ms`}
-                                        {" · "}
-                                        {msg.stats.tokensPerSec} tok/s
-                                        {" · "}
-                                        {msg.stats.tokenCount} tokens
-                                    </Typography>
-                                )}
-                            </Paper>
-                        </Box>
-                    ))}
-                    <div ref={messagesEndRef} />
+                                                    <Collapse
+                                                        in={expandedThinking.has(i)}
+                                                        sx={{
+                                                            width: "100%",
+                                                            minWidth: 0,
+                                                            "& .MuiCollapse-wrapper":
+                                                                {
+                                                                    display:
+                                                                        "block",
+                                                                    width: "100%",
+                                                                    minWidth: 0,
+                                                                },
+                                                            "& .MuiCollapse-wrapperInner":
+                                                                {
+                                                                    width: "100%",
+                                                                    minWidth: 0,
+                                                                },
+                                                        }}
+                                                    >
+                                                        <Box
+                                                            sx={{
+                                                                boxSizing:
+                                                                    "border-box",
+                                                                width: "100%",
+                                                                minWidth: 0,
+                                                                mt: 0.5,
+                                                                p: 1,
+                                                                borderRadius: 1,
+                                                                bgcolor:
+                                                                    "grey.900",
+                                                                borderLeft: 2,
+                                                                borderColor:
+                                                                    "grey.700",
+                                                                fontSize: "0.85em",
+                                                                color: "grey.400",
+                                                                maxHeight: 300,
+                                                                overflow: "auto",
+                                                                "& p": { mt: 0, mb: 0.5 },
+                                                                "& ul, & ol": { mt: 0, mb: 0.5, pl: 2 },
+                                                                "& pre": {
+                                                                    bgcolor: "grey.950",
+                                                                    p: 1,
+                                                                    borderRadius: 1,
+                                                                    overflow: "auto",
+                                                                    fontSize: "0.9em",
+                                                                },
+                                                                "& code": {
+                                                                    fontFamily: "monospace",
+                                                                    fontSize: "0.9em",
+                                                                },
+                                                                "& :not(pre) > code": {
+                                                                    bgcolor: "grey.950",
+                                                                    px: 0.5,
+                                                                    borderRadius: 0.5,
+                                                                },
+                                                            }}
+                                                        >
+                                                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                                                {msg.thinking}
+                                                            </ReactMarkdown>
+                                                        </Box>
+                                                    </Collapse>
+                                                </Box>
+                                            )}
+                                            <Box
+                                            className="markdown-body"
+                                            sx={{
+                                                "& p": { mt: 0, mb: 1 },
+                                                "& ul, & ol": { mt: 0, mb: 1, pl: 2 },
+                                                "& li": { mb: 0.25 },
+                                                "& h1, & h2, & h3, & h4, & h5, & h6": {
+                                                    mt: 1, mb: 0.5,
+                                                },
+                                                "& pre": {
+                                                    bgcolor: "grey.900",
+                                                    p: 1.5,
+                                                    borderRadius: 1,
+                                                    overflow: "auto",
+                                                    fontSize: "0.85em",
+                                                },
+                                                "& code": {
+                                                    fontFamily: "monospace",
+                                                    fontSize: "0.9em",
+                                                },
+                                                "& :not(pre) > code": {
+                                                    bgcolor: "grey.900",
+                                                    px: 0.5,
+                                                    borderRadius: 0.5,
+                                                },
+                                                "& blockquote": {
+                                                    borderLeft: 3,
+                                                    borderColor: "grey.600",
+                                                    pl: 2,
+                                                    ml: 0,
+                                                },
+                                                "& table": {
+                                                    borderCollapse: "collapse",
+                                                    width: "100%",
+                                                },
+                                                "& th, & td": {
+                                                    border: 1,
+                                                    borderColor: "grey.700",
+                                                    px: 1,
+                                                    py: 0.5,
+                                                },
+                                                "& hr": {
+                                                    borderColor: "grey.700",
+                                                },
+                                            }}
+                                        >
+                                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                                {msg.content || "..."}
+                                            </ReactMarkdown>
+                                        </Box>
+                                        </>
+                                    ) : (
+                                        <Typography
+                                            variant="body1"
+                                            sx={{ whiteSpace: "pre-wrap" }}
+                                        >
+                                            {msg.content}
+                                        </Typography>
+                                    )}
+                                    {msg.stats && (
+                                        <Typography
+                                            variant="caption"
+                                            sx={{
+                                                color: "grey.500",
+                                                mt: 0.5,
+                                                display: "block",
+                                            }}
+                                        >
+                                            PP:{" "}
+                                            {msg.stats.ppTime >= 1000
+                                                ? `${(msg.stats.ppTime / 1000).toFixed(1)}s`
+                                                : `${msg.stats.ppTime}ms`}
+                                            {" · "}
+                                            {msg.stats.tokensPerSec} tok/s
+                                            {" · "}
+                                            {msg.stats.tokenCount} tokens
+                                        </Typography>
+                                    )}
+                                </Paper>
+                            </Box>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </Container>
+                </Box>
+
+                <Container maxWidth="md" sx={{ py: 2 }}>
+                    <Box sx={{ display: "flex", gap: 1 }}>
+                        <TextField
+                            fullWidth
+                            multiline
+                            maxRows={4}
+                            placeholder="Type a message..."
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            disabled={streaming}
+                            inputRef={inputRef}
+                        />
+                        {streaming ? (
+                            <Button
+                                variant="contained"
+                                color="error"
+                                onClick={() => abortRef.current?.abort()}
+                                sx={{ minWidth: 48 }}
+                            >
+                                <StopIcon />
+                            </Button>
+                        ) : (
+                            <Button
+                                variant="contained"
+                                onClick={handleSend}
+                                disabled={!input.trim()}
+                                sx={{ minWidth: 48 }}
+                            >
+                                <SendIcon />
+                            </Button>
+                        )}
+                    </Box>
                 </Container>
             </Box>
-
-            <Container maxWidth="md" sx={{ py: 2 }}>
-                <Box sx={{ display: "flex", gap: 1 }}>
-                    <TextField
-                        fullWidth
-                        multiline
-                        maxRows={4}
-                        placeholder="Type a message..."
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        disabled={streaming}
-                        inputRef={inputRef}
-                    />
-                    {streaming ? (
-                        <Button
-                            variant="contained"
-                            color="error"
-                            onClick={() => abortRef.current?.abort()}
-                            sx={{ minWidth: 48 }}
-                        >
-                            <StopIcon />
-                        </Button>
-                    ) : (
-                        <Button
-                            variant="contained"
-                            onClick={handleSend}
-                            disabled={!input.trim()}
-                            sx={{ minWidth: 48 }}
-                        >
-                            <SendIcon />
-                        </Button>
-                    )}
-                </Box>
-            </Container>
         </Box>
     );
 }

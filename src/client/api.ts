@@ -1,4 +1,4 @@
-import type { Message, SearchSettings } from "./atoms";
+import type { ChatSummary, Message, SearchSettings } from "./atoms";
 
 const API = "/api";
 
@@ -144,5 +144,58 @@ export async function saveSearchSettings(data: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
     });
+    return res.json();
+}
+
+// --- Chat management ---
+
+export async function fetchChats(): Promise<ChatSummary[]> {
+    const res = await fetch(`${API}/chats`);
+    return res.json();
+}
+
+export async function createChatApi(
+    id: string,
+    model: string,
+): Promise<ChatSummary> {
+    const res = await fetch(`${API}/chats`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, model }),
+    });
+    return res.json();
+}
+
+export async function deleteChatApi(
+    chatId: string,
+): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/chats/${chatId}`, { method: "DELETE" });
+    return res.json();
+}
+
+export async function fetchMessages(chatId: string): Promise<Message[]> {
+    const res = await fetch(`${API}/chats/${chatId}/messages`);
+    return res.json();
+}
+
+export async function saveMessage(
+    chatId: string,
+    message: Message & { id: string },
+): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/chats/${chatId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(message),
+    });
+    return res.json();
+}
+
+export async function generateChatTitle(
+    chatId: string,
+): Promise<{ title: string }> {
+    const res = await fetch(`${API}/chats/${chatId}/generate-title`, {
+        method: "POST",
+    });
+    if (!res.ok) throw new Error("Failed to generate title");
     return res.json();
 }

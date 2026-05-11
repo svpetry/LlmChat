@@ -58,3 +58,14 @@ export const searchSettingsAtom = atom<SearchSettings>({
     apiKeySet: false,
     searxngUrlSet: false,
 });
+
+export interface ChatSummary {
+    id: string;
+    title: string;
+    model: string;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export const activeChatIdAtom = atom<string | null>(null);
+export const chatListAtom = atom<ChatSummary[]>([]);
