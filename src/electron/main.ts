@@ -14,7 +14,7 @@ if (!electronApi) {
     throw new Error("Electron runtime API was not provided by bootstrap.");
 }
 
-const { app, BrowserWindow, dialog, shell } =
+const { app, BrowserWindow, Menu, dialog, shell } =
     electronApi;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +95,7 @@ async function createWindow() {
             sandbox: true,
         },
     });
+    mainWindow.setMenu(null);
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         void shell.openExternal(url);
@@ -132,6 +133,7 @@ process.on("unhandledRejection", (error) => {
 });
 
 app.whenReady().then(() => {
+    Menu.setApplicationMenu(null);
     void createWindow().catch((error) => {
         log("Failed to create main window", error);
         dialog.showErrorBox(
