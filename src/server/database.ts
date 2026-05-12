@@ -2,12 +2,15 @@ import initSqlJs from "sql.js";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-const dataDir = join(process.cwd(), "data");
+const dataDir = process.env.LLM_CHAT_DATA_DIR ?? join(process.cwd(), "data");
 mkdirSync(dataDir, { recursive: true });
 
 const dbPath = join(dataDir, "settings.db");
 
-const SQL = await initSqlJs();
+const sqlJsWasmPath = process.env.LLM_CHAT_SQLJS_WASM_PATH;
+const SQL = await initSqlJs(
+    sqlJsWasmPath ? { locateFile: () => sqlJsWasmPath } : undefined,
+);
 
 let db: initSqlJs.Database;
 
