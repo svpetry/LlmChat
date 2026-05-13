@@ -1,4 +1,9 @@
-import type { ChatSummary, Message, SearchSettings } from "./atoms";
+import type {
+    ChatSummary,
+    FileAccessSettings,
+    Message,
+    SearchSettings,
+} from "./atoms";
 
 const API = "/api";
 
@@ -147,6 +152,22 @@ export async function saveSearchSettings(data: {
     return res.json();
 }
 
+export async function fetchFileAccessSettings(): Promise<FileAccessSettings> {
+    const res = await fetch(`${API}/file-access-settings`);
+    return res.json();
+}
+
+export async function saveFileAccessSettings(data: {
+    enabled?: boolean;
+}): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/file-access-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
 // --- Chat management ---
 
 export async function fetchChats(): Promise<ChatSummary[]> {
@@ -166,9 +187,7 @@ export async function createChatApi(
     return res.json();
 }
 
-export async function deleteChatApi(
-    chatId: string,
-): Promise<{ ok: boolean }> {
+export async function deleteChatApi(chatId: string): Promise<{ ok: boolean }> {
     const res = await fetch(`${API}/chats/${chatId}`, { method: "DELETE" });
     return res.json();
 }

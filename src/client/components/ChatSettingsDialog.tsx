@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useAtom } from "jotai";
 import {
     Box,
@@ -14,9 +14,11 @@ import {
     TextField,
     Typography,
 } from "@mui/material";
-import { searchSettingsAtom } from "../atoms.js";
+import { fileAccessSettingsAtom, searchSettingsAtom } from "../atoms.js";
 import {
+    fetchFileAccessSettings,
     fetchSearchSettings,
+    saveFileAccessSettings,
     saveSearchSettings,
 } from "../api.js";
 
@@ -27,7 +29,9 @@ interface Props {
 
 export default function ChatSettingsDialog({ open, onClose }: Props) {
     const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
+    const [, setFileAccessSettings] = useAtom(fileAccessSettingsAtom);
     const [enabled, setEnabled] = useState(false);
+    const [fileAccessEnabled, setFileAccessEnabled] = useState(false);
     const [provider, setProvider] = useState<"brave" | "searxng">("brave");
     const [apiKey, setApiKey] = useState("");
     const [searxngUrl, setSearxngUrl] = useState("");
@@ -39,15 +43,20 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             setLoaded(false);
             return;
         }
-        fetchSearchSettings().then((s) => {
-            setSearchSettings(s);
-            setEnabled(s.enabled);
-            setProvider(s.provider);
-            setApiKey("");
-            setSearxngUrl("");
-            setLoaded(true);
-        });
-    }, [open, setSearchSettings]);
+
+        Promise.all([fetchSearchSettings(), fetchFileAccessSettings()]).then(
+            ([s, f]) => {
+                setSearchSettings(s);
+                setFileAccessSettings(f);
+                setEnabled(s.enabled);
+                setFileAccessEnabled(f.enabled);
+                setProvider(s.provider);
+                setApiKey("");
+                setSearxngUrl("");
+                setLoaded(true);
+            },
+        );
+    }, [open, setFileAccessSettings, setSearchSettings]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -62,9 +71,16 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             if (provider === "searxng" && searxngUrl) {
                 data.searxngUrl = searxngUrl;
             }
-            await saveSearchSettings(data);
-            const updated = await fetchSearchSettings();
-            setSearchSettings(updated);
+            await Promise.all([
+                saveSearchSettings(data),
+                saveFileAccessSettings({ enabled: fileAccessEnabled }),
+            ]);
+            const [updatedSearch, updatedFileAccess] = await Promise.all([
+                fetchSearchSettings(),
+                fetchFileAccessSettings(),
+            ]);
+            setSearchSettings(updatedSearch);
+            setFileAccessSettings(updatedFileAccess);
             onClose();
         } finally {
             setSaving(false);
@@ -75,7 +91,14 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
         <Dialog open={open && loaded} onClose={onClose} maxWidth="xs" fullWidth>
             <DialogTitle>Settings</DialogTitle>
             <DialogContent>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 2, mt: 1 }}>
+                <Box
+                    sx={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                        mt: 1,
+                    }}
+                >
                     <FormControlLabel
                         control={
                             <Switch
@@ -88,19 +111,34 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
 
                     {enabled && (
                         <>
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                                <Typography variant="body2" sx={{ minWidth: 60 }}>
+                            <Box
+                                sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 1,
+                                }}
+                            >
+                                <Typography
+                                    variant="body2"
+                                    sx={{ minWidth: 60 }}
+                                >
                                     Provider
                                 </Typography>
                                 <Select
                                     size="small"
                                     value={provider}
                                     onChange={(e) =>
-                                        setProvider(e.target.value as "brave" | "searxng")
+                                        setProvider(
+                                            e.target.value as
+                                                | "brave"
+                                                | "searxng",
+                                        )
                                     }
                                     fullWidth
                                 >
-                                    <MenuItem value="brave">Brave Search</MenuItem>
+                                    <MenuItem value="brave">
+                                        Brave Search
+                                    </MenuItem>
                                     <MenuItem value="searxng">SearXNG</MenuItem>
                                 </Select>
                             </Box>
@@ -113,7 +151,7 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                                     onChange={(e) => setApiKey(e.target.value)}
                                     placeholder={
                                         searchSettings.apiKeySet
-                                            ? "Key saved — leave empty to keep"
+                                            ? "Key saved - leave empty to keep"
                                             : ""
                                     }
                                     size="small"
@@ -125,10 +163,12 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                                 <TextField
                                     label="SearXNG Instance URL"
                                     value={searxngUrl}
-                                    onChange={(e) => setSearxngUrl(e.target.value)}
+                                    onChange={(e) =>
+                                        setSearxngUrl(e.target.value)
+                                    }
                                     placeholder={
                                         searchSettings.searxngUrlSet
-                                            ? "URL saved — leave empty to keep"
+                                            ? "URL saved - leave empty to keep"
                                             : "https://searx.be"
                                     }
                                     size="small"
@@ -137,11 +177,33 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                             )}
                         </>
                     )}
+
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={fileAccessEnabled}
+                                    onChange={(e) =>
+                                        setFileAccessEnabled(e.target.checked)
+                                    }
+                                />
+                            }
+                            label="Home Directory File Access"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Allows model tool calls to read, search, edit,
+                            create, and delete files under your home directory.
+                        </Typography>
+                    </Box>
                 </Box>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose}>Cancel</Button>
-                <Button onClick={handleSave} disabled={saving} variant="contained">
+                <Button
+                    onClick={handleSave}
+                    disabled={saving}
+                    variant="contained"
+                >
                     Save
                 </Button>
             </DialogActions>

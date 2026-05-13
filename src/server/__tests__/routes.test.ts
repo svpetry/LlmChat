@@ -8,6 +8,7 @@ const mockGetAllSettings = vi.fn();
 const mockSearchBrave = vi.fn();
 const mockSearchSearxng = vi.fn();
 const mockFetchWebsiteContent = vi.fn();
+const mockExecuteHomeFileTool = vi.fn();
 const mockCreateChat = vi.fn();
 const mockGetChat = vi.fn();
 const mockUpdateChatTitle = vi.fn();
@@ -59,6 +60,28 @@ vi.mock("../search.js", () => ({
             },
         },
     },
+}));
+
+vi.mock("../fileAccess.js", () => ({
+    executeHomeFileTool: mockExecuteHomeFileTool,
+    homeFileTools: [
+        {
+            type: "function",
+            function: {
+                name: "list_home_directory",
+                description: "List files",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "read_home_file",
+                description: "Read file",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+    ],
 }));
 
 const mockFetch = vi.fn();
@@ -155,6 +178,41 @@ describe("POST /api/settings", () => {
         expect(mockSetSetting).toHaveBeenCalledWith(
             "baseUrl",
             "http://example.com/v1",
+        );
+    });
+});
+
+describe("file access settings", () => {
+    it("defaults home directory file access to disabled", async () => {
+        mockGetAllSettings.mockReturnValue({});
+
+        const res = await request(createApp()).get("/api/file-access-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: false });
+    });
+
+    it("returns stored home directory file access setting", async () => {
+        mockGetAllSettings.mockReturnValue({
+            homeFileAccessEnabled: "true",
+        });
+
+        const res = await request(createApp()).get("/api/file-access-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: true });
+    });
+
+    it("saves home directory file access setting", async () => {
+        const res = await request(createApp())
+            .post("/api/file-access-settings")
+            .send({ enabled: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ ok: true });
+        expect(mockSetSetting).toHaveBeenCalledWith(
+            "homeFileAccessEnabled",
+            "true",
         );
     });
 });
@@ -478,6 +536,210 @@ describe("POST /api/chat", () => {
             expect.objectContaining({
                 role: "tool",
                 content: expect.stringContaining("Article text from the page"),
+            }),
+        );
+    });
+
+    it("advertises home file tools only when home file access is enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "homeFileAccessEnabled") return "true";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue(
+            createStreamResponse([
+                sseData({
+                    choices: [{ delta: { content: "Ready." } }],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "list files" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools: { function: { name: string } }[];
+        };
+        expect(body.tools.map((tool) => tool.function.name)).toEqual([
+            "list_home_directory",
+            "read_home_file",
+        ]);
+    });
+
+    it("does not advertise home file tools when home file access is disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            body: {
+                getReader: () => ({
+                    read: vi.fn(async () => ({ done: true })),
+                }),
+            },
+        });
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "list files" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools?: unknown[];
+        };
+        expect(body.tools).toBeUndefined();
+    });
+
+    it("refuses home file tool calls when home file access is disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            return undefined;
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_file",
+                                            type: "function",
+                                            function: {
+                                                name: "read_home_file",
+                                                arguments:
+                                                    '{"path":"notes.txt"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [{ delta: { content: "Could not read it." } }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "read notes" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain(
+            "Error: Home directory file access is disabled",
+        );
+        expect(res.text).toContain("Could not read it.");
+        expect(mockExecuteHomeFileTool).not.toHaveBeenCalled();
+    });
+
+    it("executes home file tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "homeFileAccessEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteHomeFileTool.mockResolvedValue({
+            summary: "Read ~/notes.txt",
+            content: "file contents",
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_file",
+                                            type: "function",
+                                            function: {
+                                                name: "read_home_file",
+                                                arguments:
+                                                    '{"path":"notes.txt"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [{ delta: { content: "Done." } }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "read notes" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Read ~/notes.txt");
+        expect(res.text).toContain("Done.");
+        expect(mockExecuteHomeFileTool).toHaveBeenCalledWith(
+            "read_home_file",
+            '{"path":"notes.txt"}',
+        );
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: "file contents",
             }),
         );
     });

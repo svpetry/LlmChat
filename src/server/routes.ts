@@ -20,6 +20,7 @@ import {
     webSearchTool,
     type SearchResult,
 } from "./search.js";
+import { executeHomeFileTool, homeFileTools } from "./fileAccess.js";
 
 export const router = Router();
 
@@ -95,6 +96,23 @@ router.post("/api/search-settings", (req, res) => {
     if (provider !== undefined) setSetting("searchProvider", provider);
     if (searchApiKey !== undefined) setSetting("searchApiKey", searchApiKey);
     if (searxngUrl !== undefined) setSetting("searxngUrl", searxngUrl);
+    res.json({ ok: true });
+});
+
+// --- Home directory file access settings ---
+
+router.get("/api/file-access-settings", (_req, res) => {
+    const settings = getAllSettings();
+    res.json({
+        enabled: settings.homeFileAccessEnabled === "true",
+    });
+});
+
+router.post("/api/file-access-settings", (req, res) => {
+    const { enabled } = req.body as { enabled?: boolean };
+    if (enabled !== undefined) {
+        setSetting("homeFileAccessEnabled", String(enabled));
+    }
     res.json({ ok: true });
 });
 
@@ -329,7 +347,10 @@ interface OpenAIToolCall {
     function: { name: string; arguments: string };
 }
 
-type ChatTool = typeof webSearchTool | typeof readWebsiteTool;
+type ChatTool =
+    | typeof webSearchTool
+    | typeof readWebsiteTool
+    | (typeof homeFileTools)[number];
 
 class LeadingChannelMarkupSanitizer {
     private buffer = "";
@@ -534,6 +555,20 @@ async function executeToolCall(
 
     if (toolCall.function.name === "read_website") {
         return executeReadWebsite(toolCall);
+    }
+
+    if (
+        homeFileTools.some(
+            (tool) => tool.function.name === toolCall.function.name,
+        )
+    ) {
+        if (getSetting("homeFileAccessEnabled") !== "true") {
+            throw new Error("Home directory file access is disabled");
+        }
+        return executeHomeFileTool(
+            toolCall.function.name,
+            toolCall.function.arguments,
+        );
     }
 
     throw new Error(`Unknown tool: ${toolCall.function.name}`);
@@ -790,6 +825,9 @@ router.post("/api/chat", async (req, res) => {
             tools.push(webSearchTool);
         }
         tools.push(readWebsiteTool);
+    }
+    if (toolsEnabled && getSetting("homeFileAccessEnabled") === "true") {
+        tools.push(...homeFileTools);
     }
     const useTools = tools.length > 0;
 

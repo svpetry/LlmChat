@@ -26,6 +26,8 @@ import rehypeKatex from "rehype-katex";
 import {
     connectionAtom,
     defaultConnection,
+    fileAccessSettingsAtom,
+    type FileAccessSettings,
     type MessageStats,
     type SearchSettings,
     type ToolCall,
@@ -37,6 +39,7 @@ import {
     chatListAtom,
 } from "../atoms.js";
 import {
+    fetchFileAccessSettings,
     fetchSearchSettings,
     streamChat,
     fetchChats,
@@ -49,8 +52,11 @@ import {
 import ChatSettingsDialog from "./ChatSettingsDialog.js";
 import ChatSidebar from "./ChatSidebar.js";
 
-function canUseSearchTools(settings: SearchSettings) {
-    return settings.enabled;
+function canUseTools(
+    searchSettings: SearchSettings,
+    fileAccessSettings: FileAccessSettings,
+) {
+    return searchSettings.enabled || fileAccessSettings.enabled;
 }
 
 function getToolDisplay(toolCall: ToolCall) {
@@ -75,6 +81,27 @@ function getToolDisplay(toolCall: ToolCall) {
         };
     }
 
+    const fileToolLabels: Record<string, string> = {
+        list_home_directory: "List files",
+        get_home_path_info: "Inspect path",
+        search_home_paths: "Search files",
+        read_home_file: "Read file",
+        search_home_file_text: "Search file text",
+        edit_home_file_lines: "Edit file",
+        create_home_path: "Create path",
+        delete_home_path: "Delete path",
+    };
+
+    if (toolCall.name in fileToolLabels) {
+        const detail =
+            typeof args.path === "string"
+                ? args.path
+                : typeof args.query === "string"
+                  ? args.query
+                  : "";
+        return { label: fileToolLabels[toolCall.name], detail };
+    }
+
     return { label: toolCall.name, detail: toolCall.arguments };
 }
 
@@ -83,6 +110,9 @@ export default function ChatScreen() {
     const [messages, setMessages] = useAtom(messagesAtom);
     const [streaming, setStreaming] = useAtom(streamingAtom);
     const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
+    const [fileAccessSettings, setFileAccessSettings] = useAtom(
+        fileAccessSettingsAtom,
+    );
     const [activeChatId, setActiveChatId] = useAtom(activeChatIdAtom);
     const [chatList, setChatList] = useAtom(chatListAtom);
     const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
@@ -99,6 +129,8 @@ export default function ChatScreen() {
     const searchSettingsPromiseRef = useRef<Promise<SearchSettings> | null>(
         null,
     );
+    const fileAccessSettingsPromiseRef =
+        useRef<Promise<FileAccessSettings> | null>(null);
     const initializedRef = useRef(false);
 
     const scrollToBottom = () => {
@@ -114,26 +146,33 @@ export default function ChatScreen() {
     // Load search settings
     useEffect(() => {
         let cancelled = false;
-        const load = searchSettingsPromiseRef.current ?? fetchSearchSettings();
-        searchSettingsPromiseRef.current = load;
+        const searchLoad =
+            searchSettingsPromiseRef.current ?? fetchSearchSettings();
+        const fileAccessLoad =
+            fileAccessSettingsPromiseRef.current ?? fetchFileAccessSettings();
+        searchSettingsPromiseRef.current = searchLoad;
+        fileAccessSettingsPromiseRef.current = fileAccessLoad;
 
-        load.then((settings) => {
-            if (cancelled) return;
-            setSearchSettings(settings);
-        })
+        Promise.all([searchLoad, fileAccessLoad])
+            .then(([settings, fileSettings]) => {
+                if (cancelled) return;
+                setSearchSettings(settings);
+                setFileAccessSettings(fileSettings);
+            })
             .catch(() => {
-                // Leave search disabled if settings cannot be loaded.
+                // Leave tools disabled if settings cannot be loaded.
             })
             .finally(() => {
                 if (cancelled) return;
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
+                fileAccessSettingsPromiseRef.current = null;
             });
 
         return () => {
             cancelled = true;
         };
-    }, [setSearchSettings]);
+    }, [setFileAccessSettings, setSearchSettings]);
 
     // Load chat list and initialize on mount
     useEffect(() => {
@@ -225,22 +264,34 @@ export default function ChatScreen() {
         let firstTokenTime = 0;
         let tokenCount = 0;
 
-        let settingsForSend = searchSettings;
+        let searchSettingsForSend = searchSettings;
+        let fileAccessSettingsForSend = fileAccessSettings;
         if (!searchSettingsLoaded) {
             try {
-                const load =
+                const searchLoad =
                     searchSettingsPromiseRef.current ?? fetchSearchSettings();
-                searchSettingsPromiseRef.current = load;
-                settingsForSend = await load;
-                setSearchSettings(settingsForSend);
+                const fileAccessLoad =
+                    fileAccessSettingsPromiseRef.current ??
+                    fetchFileAccessSettings();
+                searchSettingsPromiseRef.current = searchLoad;
+                fileAccessSettingsPromiseRef.current = fileAccessLoad;
+                [searchSettingsForSend, fileAccessSettingsForSend] =
+                    await Promise.all([searchLoad, fileAccessLoad]);
+                setSearchSettings(searchSettingsForSend);
+                setFileAccessSettings(fileAccessSettingsForSend);
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
+                fileAccessSettingsPromiseRef.current = null;
             } catch {
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
+                fileAccessSettingsPromiseRef.current = null;
             }
         }
-        const toolsEnabled = canUseSearchTools(settingsForSend);
+        const toolsEnabled = canUseTools(
+            searchSettingsForSend,
+            fileAccessSettingsForSend,
+        );
 
         const setAssistantMessage = (
             content: string,

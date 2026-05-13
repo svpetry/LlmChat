@@ -41,6 +41,10 @@ export interface SearchSettings {
     searxngUrlSet: boolean;
 }
 
+export interface FileAccessSettings {
+    enabled: boolean;
+}
+
 export const defaultConnection: ConnectionState = {
     baseUrl: "",
     apiKey: "",
@@ -57,6 +61,9 @@ export const searchSettingsAtom = atom<SearchSettings>({
     provider: "brave",
     apiKeySet: false,
     searxngUrlSet: false,
+});
+export const fileAccessSettingsAtom = atom<FileAccessSettings>({
+    enabled: false,
 });
 
 export interface ChatSummary {
