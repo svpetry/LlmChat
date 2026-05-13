@@ -13,6 +13,8 @@ import {
     getMessagesByChat,
 } from "./database.js";
 import {
+    fetchWebsiteContent,
+    readWebsiteTool,
     searchBrave,
     searchSearxng,
     webSearchTool,
@@ -327,6 +329,8 @@ interface OpenAIToolCall {
     function: { name: string; arguments: string };
 }
 
+type ChatTool = typeof webSearchTool | typeof readWebsiteTool;
+
 class LeadingChannelMarkupSanitizer {
     private buffer = "";
     private released = false;
@@ -491,12 +495,56 @@ async function executeSearch(
     return { results, content };
 }
 
+async function executeReadWebsite(
+    toolCall: OpenAIToolCall,
+): Promise<{ summary: string; content: string }> {
+    let args: { url?: string };
+    try {
+        args = JSON.parse(toolCall.function.arguments);
+    } catch {
+        throw new Error("Invalid tool call arguments");
+    }
+    const url = args.url;
+    if (!url) throw new Error("Missing url parameter");
+
+    const page = await fetchWebsiteContent(url);
+    const content = [
+        `Title: ${page.title}`,
+        `URL: ${page.url}`,
+        page.truncated ? "Content (truncated):" : "Content:",
+        page.content,
+    ].join("\n");
+    const summary = `Read ${page.title} (${page.url})${
+        page.truncated ? " (truncated)" : ""
+    }`;
+
+    return { summary, content };
+}
+
+async function executeToolCall(
+    toolCall: OpenAIToolCall,
+): Promise<{ summary: string; content: string }> {
+    if (toolCall.function.name === "web_search") {
+        const { results, content } = await executeSearch(toolCall);
+        return {
+            summary: results.map((r) => r.title).join(", "),
+            content,
+        };
+    }
+
+    if (toolCall.function.name === "read_website") {
+        return executeReadWebsite(toolCall);
+    }
+
+    throw new Error(`Unknown tool: ${toolCall.function.name}`);
+}
+
 async function streamWithTools(
     baseUrl: string,
     apiKey: string,
     model: string,
     openaiMessages: ReturnType<typeof toOpenAIMessages>,
-    tools: typeof webSearchTool[],
+    tools: ChatTool[],
     res: import("express").Response,
     signal?: AbortSignal,
     iteration = 0,
@@ -651,11 +699,14 @@ async function streamWithTools(
         }
 
         // Execute each tool call and emit results
-        const toolMessages: { role: string; tool_call_id: string; content: string }[] =
-            [];
+        const toolMessages: {
+            role: string;
+            tool_call_id: string;
+            content: string;
+        }[] = [];
         for (const tc of toolCallsArray) {
             try {
-                const { results, content } = await executeSearch(tc);
+                const { summary, content } = await executeToolCall(tc);
                 toolMessages.push({
                     role: "tool",
                     tool_call_id: tc.id,
@@ -664,9 +715,7 @@ async function streamWithTools(
                 res.write(
                     `event: tool_result\ndata: ${JSON.stringify({
                         toolCallId: tc.id,
-                        content: results
-                            .map((r) => r.title)
-                            .join(", "),
+                        content: summary,
                     })}\n\n`,
                 );
             } catch (err) {
@@ -735,7 +784,14 @@ router.post("/api/chat", async (req, res) => {
             ? !!getSetting("searxngUrl")
             : !!getSetting("searchApiKey");
 
-    const useTools = toolsEnabled && searchEnabled && hasSearchCredentials;
+    const tools: ChatTool[] = [];
+    if (toolsEnabled && searchEnabled) {
+        if (hasSearchCredentials) {
+            tools.push(webSearchTool);
+        }
+        tools.push(readWebsiteTool);
+    }
+    const useTools = tools.length > 0;
 
     try {
         const openaiMessages = toOpenAIMessages(messages);
@@ -750,7 +806,7 @@ router.post("/api/chat", async (req, res) => {
                 apiKey,
                 model,
                 openaiMessages,
-                [webSearchTool],
+                tools,
                 res,
                 (req as unknown as { signal?: AbortSignal }).signal,
             );
