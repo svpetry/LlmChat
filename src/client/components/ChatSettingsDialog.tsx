@@ -223,7 +223,8 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                         />
                         <Typography variant="caption" color="text.secondary">
                             Allows model tool calls to read, search, edit,
-                            create, and delete files under your home directory.
+                            create, download, and delete files under your home
+                            directory.
                         </Typography>
                     </Box>
                 </Box>

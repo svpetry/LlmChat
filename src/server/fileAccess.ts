@@ -13,14 +13,27 @@ import {
 import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
+import { fetchPublicUrlBytes } from "./search.js";
 
 const MAX_LIST_ENTRIES = 2_000;
 const MAX_SEARCH_RESULTS = 200;
 const MAX_TEXT_MATCHES = 200;
 const MAX_FILE_READ_BYTES = 1_000_000;
 const MAX_TEXT_SEARCH_FILE_BYTES = 2_000_000;
+const MAX_IMAGE_READ_BYTES = 8_000_000;
+const MAX_HOME_DOWNLOAD_BYTES = 25_000_000;
 
-type HomeToolResult = { summary: string; content: string };
+type HomeToolResult = {
+    summary: string;
+    content: string;
+    image?: {
+        path: string;
+        name: string;
+        mimeType: string;
+        bytes: number;
+        dataUrl: string;
+    };
+};
 
 export const homeFileTools = [
     {
@@ -145,6 +158,25 @@ export const homeFileTools = [
     {
         type: "function" as const,
         function: {
+            name: "read_home_image",
+            description:
+                "Read a raster image file under the user's home directory and display it in the chat.",
+            parameters: {
+                type: "object",
+                properties: {
+                    path: {
+                        type: "string",
+                        description:
+                            "Image file to display, relative to the home directory or an absolute path inside it.",
+                    },
+                },
+                required: ["path"],
+            },
+        },
+    },
+    {
+        type: "function" as const,
+        function: {
             name: "search_home_file_text",
             description:
                 "Search text inside files under the user's home directory.",
@@ -254,6 +286,35 @@ export const homeFileTools = [
     {
         type: "function" as const,
         function: {
+            name: "download_home_file",
+            description:
+                "Download bytes from a public http or https URL and save them to a file under the user's home directory. Use this for images or other binary files; create_home_path only writes text.",
+            parameters: {
+                type: "object",
+                properties: {
+                    url: {
+                        type: "string",
+                        description:
+                            "Public http or https URL to download. Local and private-network URLs are blocked.",
+                    },
+                    path: {
+                        type: "string",
+                        description:
+                            "Destination file path, relative to the home directory or an absolute path inside it.",
+                    },
+                    overwrite: {
+                        type: "boolean",
+                        description:
+                            "Whether to replace an existing file. Defaults to false.",
+                    },
+                },
+                required: ["url", "path"],
+            },
+        },
+    },
+    {
+        type: "function" as const,
+        function: {
             name: "delete_home_path",
             description:
                 "Delete a file or folder under the user's home directory.",
@@ -296,12 +357,16 @@ export async function executeHomeFileTool(
             return searchHomePaths(args);
         case "read_home_file":
             return readHomeFile(args);
+        case "read_home_image":
+            return readHomeImage(args);
         case "search_home_file_text":
             return searchHomeFileText(args);
         case "edit_home_file_lines":
             return editHomeFileLines(args);
         case "create_home_path":
             return createHomePath(args);
+        case "download_home_file":
+            return downloadHomeFile(args);
         case "delete_home_path":
             return deleteHomePath(args);
         default:
@@ -458,6 +523,130 @@ async function readHomeFile(
     });
 }
 
+async function readHomeImage(
+    args: Record<string, unknown>,
+): Promise<HomeToolResult> {
+    const target = await resolveExistingPath(requireString(args.path, "path"));
+    await assertReadableFile(target);
+
+    const info = await lstat(target);
+    if (info.size > MAX_IMAGE_READ_BYTES) {
+        throw new Error(
+            `Image is too large; maximum size is ${MAX_IMAGE_READ_BYTES} bytes`,
+        );
+    }
+
+    const originalBytes = await readFile(target);
+    const imageSource = await resolveImageSource(originalBytes);
+    const bytes = imageSource.bytes;
+    const mimeType = detectImageMimeType(bytes);
+    if (!mimeType) {
+        throw new Error(
+            "Unsupported image type. Supported raster formats are PNG, JPEG, GIF, WebP, BMP, and AVIF.",
+        );
+    }
+
+    const image = {
+        path: displayPath(target),
+        name: path.basename(target),
+        mimeType,
+        bytes: bytes.length,
+        dataUrl: `data:${mimeType};base64,${bytes.toString("base64")}`,
+    };
+
+    return {
+        summary: `Displayed ${displayPath(target)}${imageSource.url ? ` from ${imageSource.url}` : ""}`,
+        content: JSON.stringify(
+            {
+                path: image.path,
+                name: image.name,
+                mimeType: image.mimeType,
+                bytes: image.bytes,
+                sourceUrl: imageSource.url,
+                displayedToUser: true,
+                note: "The image was displayed in the chat UI. This tool result only provides metadata to the model.",
+            },
+            null,
+            2,
+        ),
+        image,
+    };
+}
+
+async function resolveImageSource(bytes: Buffer) {
+    if (detectImageMimeType(bytes)) {
+        return { bytes };
+    }
+
+    const url = parseImageUrlPointer(bytes);
+    if (!url) {
+        return { bytes };
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch image URL: ${response.status}`);
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (
+        contentLength &&
+        Number.isFinite(Number(contentLength)) &&
+        Number(contentLength) > MAX_IMAGE_READ_BYTES
+    ) {
+        throw new Error(
+            `Image is too large; maximum size is ${MAX_IMAGE_READ_BYTES} bytes`,
+        );
+    }
+
+    return {
+        bytes: await readResponseBodyLimited(response, MAX_IMAGE_READ_BYTES),
+        url,
+    };
+}
+
+function parseImageUrlPointer(bytes: Buffer) {
+    if (bytes.length > 2_000) return undefined;
+
+    const text = new TextDecoder("utf-8", { fatal: false })
+        .decode(bytes)
+        .trim();
+    if (!/^https?:\/\/\S+$/i.test(text)) return undefined;
+
+    try {
+        const url = new URL(text);
+        return url.toString();
+    } catch {
+        return undefined;
+    }
+}
+
+async function readResponseBodyLimited(response: Response, maxBytes: number) {
+    if (!response.body) {
+        return Buffer.from(await response.arrayBuffer());
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let total = 0;
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = Buffer.from(value);
+        total += chunk.length;
+        if (total > maxBytes) {
+            reader.cancel().catch(() => {});
+            throw new Error(
+                `Image is too large; maximum size is ${MAX_IMAGE_READ_BYTES} bytes`,
+            );
+        }
+        chunks.push(chunk);
+    }
+
+    return Buffer.concat(chunks, total);
+}
+
 async function searchHomeFileText(
     args: Record<string, unknown>,
 ): Promise<HomeToolResult> {
@@ -591,6 +780,32 @@ async function createHomePath(
         path: displayPath(target),
         kind,
         bytes: Buffer.byteLength(getString(args.content, ""), "utf8"),
+    });
+}
+
+async function downloadHomeFile(
+    args: Record<string, unknown>,
+): Promise<HomeToolResult> {
+    const url = requireString(args.url, "url");
+    const target = await resolveCreatablePath(requireString(args.path, "path"));
+    const overwrite = args.overwrite === true;
+
+    if (!overwrite && (await pathExists(target))) {
+        throw new Error("Path already exists");
+    }
+
+    const downloaded = await fetchPublicUrlBytes(url, MAX_HOME_DOWNLOAD_BYTES);
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, Buffer.from(downloaded.bytes), {
+        flag: overwrite ? "w" : "wx",
+    });
+
+    return jsonResult(`Downloaded ${displayPath(target)}`, {
+        path: displayPath(target),
+        sourceUrl: downloaded.finalUrl,
+        contentType: downloaded.contentType,
+        bytes: downloaded.bytes.length,
+        overwrite,
     });
 }
 
@@ -787,6 +1002,50 @@ function displayPath(filePath: string) {
 function normalizeForComparison(filePath: string) {
     const normalized = path.resolve(filePath);
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function detectImageMimeType(bytes: Buffer) {
+    if (
+        bytes.length >= 8 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47 &&
+        bytes[4] === 0x0d &&
+        bytes[5] === 0x0a &&
+        bytes[6] === 0x1a &&
+        bytes[7] === 0x0a
+    ) {
+        return "image/png";
+    }
+
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+        return "image/jpeg";
+    }
+
+    const header = bytes.subarray(0, 12).toString("ascii");
+    if (header.startsWith("GIF87a") || header.startsWith("GIF89a")) {
+        return "image/gif";
+    }
+
+    if (
+        bytes.length >= 12 &&
+        header.startsWith("RIFF") &&
+        header.endsWith("WEBP")
+    ) {
+        return "image/webp";
+    }
+
+    if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+        return "image/bmp";
+    }
+
+    const brand = bytes.subarray(4, 32).toString("ascii");
+    if (brand.includes("ftypavif") || brand.includes("ftypavis")) {
+        return "image/avif";
+    }
+
+    return undefined;
 }
 
 async function pathExists(filePath: string) {

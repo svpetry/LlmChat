@@ -93,6 +93,22 @@ vi.mock("../fileAccess.js", () => ({
                 parameters: { type: "object", properties: {} },
             },
         },
+        {
+            type: "function",
+            function: {
+                name: "read_home_image",
+                description: "Display image",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "download_home_file",
+                description: "Download file",
+                parameters: { type: "object", properties: {} },
+            },
+        },
     ],
 }));
 
@@ -414,6 +430,15 @@ describe("POST /api/chat", () => {
                 }),
             }),
         );
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            messages: { role: string; content: string }[];
+        };
+        expect(body.messages[0]).toEqual(
+            expect.objectContaining({
+                role: "system",
+                content: expect.stringContaining("Current date and time:"),
+            }),
+        );
     });
 
     it("strips channel markup from tool follow-up content", async () => {
@@ -584,6 +609,98 @@ describe("POST /api/chat", () => {
         );
     });
 
+    it("emits image data for direct image URLs fetched by read_website", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            return undefined;
+        });
+        mockFetchWebsiteContent.mockResolvedValue({
+            title: "anime_girl.png",
+            url: "https://example.com/anime_girl.png",
+            content: [
+                "Image: anime_girl.png",
+                "MIME type: image/png",
+                "Bytes: 68",
+                "Displayed to user: true",
+            ].join("\n"),
+            contentType: "image/png",
+            truncated: false,
+            image: {
+                name: "anime_girl.png",
+                mimeType: "image/png",
+                bytes: 68,
+                dataUrl: "data:image/png;base64,abc",
+            },
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_read_image",
+                                            type: "function",
+                                            function: {
+                                                name: "read_website",
+                                                arguments:
+                                                    '{"url":"https://example.com/anime_girl.png"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "I fetched the image." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "show this image" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Fetched image anime_girl.png");
+        expect(res.text).toContain("data:image/png;base64,abc");
+        expect(res.text).toContain("I fetched the image.");
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: expect.stringContaining("Displayed to user: true"),
+            }),
+        );
+        expect(JSON.stringify(secondBody)).not.toContain("data:image/png");
+    });
+
     it("advertises home file tools only when home file access is enabled", async () => {
         mockGetSetting.mockImplementation((key: string) => {
             if (key === "baseUrl") return "http://llm.example.com/v1";
@@ -615,6 +732,8 @@ describe("POST /api/chat", () => {
         expect(body.tools.map((tool) => tool.function.name)).toEqual([
             "list_home_directory",
             "read_home_file",
+            "read_home_image",
+            "download_home_file",
         ]);
     });
 
@@ -788,6 +907,161 @@ describe("POST /api/chat", () => {
         );
     });
 
+    it("emits image data for read_home_image tool results", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "homeFileAccessEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteHomeFileTool.mockResolvedValue({
+            summary: "Displayed ~/photo.png",
+            content: '{"displayedToUser":true}',
+            image: {
+                path: "~/photo.png",
+                name: "photo.png",
+                mimeType: "image/png",
+                bytes: 68,
+                dataUrl: "data:image/png;base64,abc",
+            },
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_image",
+                                            type: "function",
+                                            function: {
+                                                name: "read_home_image",
+                                                arguments:
+                                                    '{"path":"photo.png"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "That image is shown." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "show photo" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Displayed ~/photo.png");
+        expect(res.text).toContain("data:image/png;base64,abc");
+        expect(mockExecuteHomeFileTool).toHaveBeenCalledWith(
+            "read_home_image",
+            '{"path":"photo.png"}',
+        );
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: '{"displayedToUser":true}',
+            }),
+        );
+        expect(JSON.stringify(secondBody)).not.toContain("data:image/png");
+    });
+
+    it("executes download_home_file tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "homeFileAccessEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteHomeFileTool.mockResolvedValue({
+            summary: "Downloaded ~/anime_girl.png",
+            content:
+                '{"path":"~/anime_girl.png","sourceUrl":"https://example.com/anime_girl.png","bytes":68}',
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_download",
+                                            type: "function",
+                                            function: {
+                                                name: "download_home_file",
+                                                arguments:
+                                                    '{"url":"https://example.com/anime_girl.png","path":"anime_girl.png","overwrite":true}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [{ delta: { content: "Downloaded." } }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "download this image" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Downloaded ~/anime_girl.png");
+        expect(res.text).toContain("Downloaded.");
+        expect(mockExecuteHomeFileTool).toHaveBeenCalledWith(
+            "download_home_file",
+            '{"url":"https://example.com/anime_girl.png","path":"anime_girl.png","overwrite":true}',
+        );
+    });
+
     it("advertises memory tools and tells the model about memory when enabled", async () => {
         mockGetSetting.mockImplementation((key: string) => {
             if (key === "baseUrl") return "http://llm.example.com/v1";
@@ -826,6 +1100,12 @@ describe("POST /api/chat", () => {
             "clear_memories",
         ]);
         expect(body.messages[0]).toEqual(
+            expect.objectContaining({
+                role: "system",
+                content: expect.stringContaining("Current date and time:"),
+            }),
+        );
+        expect(body.messages[1]).toEqual(
             expect.objectContaining({
                 role: "system",
                 content: expect.stringContaining("Memory is enabled"),

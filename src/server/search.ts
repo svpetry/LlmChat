@@ -13,9 +13,24 @@ export interface WebsiteContent {
     content: string;
     contentType: string;
     truncated: boolean;
+    image?: WebsiteImage;
+}
+
+export interface WebsiteImage {
+    name: string;
+    mimeType: string;
+    bytes: number;
+    dataUrl: string;
+}
+
+export interface DownloadedUrlContent {
+    finalUrl: string;
+    contentType: string;
+    bytes: Uint8Array;
 }
 
 const MAX_WEBSITE_BYTES = 1_000_000;
+const MAX_WEBSITE_IMAGE_BYTES = 8_000_000;
 const MAX_WEBSITE_CHARS = 20_000;
 const MAX_WEBSITE_REDIRECTS = 5;
 const WEBSITE_FETCH_TIMEOUT_MS = 15_000;
@@ -63,6 +78,82 @@ export async function searchSearxng(
     }));
 }
 
+export async function fetchPublicUrlBytes(
+    url: string,
+    maxBytes: number,
+): Promise<DownloadedUrlContent> {
+    let currentUrl = await validatePublicHttpUrl(url);
+
+    for (let redirectCount = 0; ; redirectCount++) {
+        const controller = new AbortController();
+        const timeout = setTimeout(
+            () => controller.abort(),
+            WEBSITE_FETCH_TIMEOUT_MS,
+        );
+
+        let response: Response;
+        try {
+            response = await fetch(currentUrl.href, {
+                redirect: "manual",
+                signal: controller.signal,
+                headers: {
+                    Accept: "*/*",
+                    "User-Agent": "LLMChat/1.0 (+https://localhost)",
+                },
+            });
+        } finally {
+            clearTimeout(timeout);
+        }
+
+        if (isRedirect(response.status)) {
+            if (redirectCount >= MAX_WEBSITE_REDIRECTS) {
+                throw new Error("Too many redirects");
+            }
+
+            const location = response.headers.get("location");
+            if (!location) {
+                throw new Error("Redirect response missing location");
+            }
+
+            currentUrl = await validatePublicHttpUrl(
+                new URL(location, currentUrl).href,
+            );
+            continue;
+        }
+
+        if (!response.ok) {
+            throw new Error(`URL returned HTTP ${response.status}`);
+        }
+
+        const contentLength = response.headers.get("content-length");
+        if (
+            contentLength &&
+            Number.isFinite(Number(contentLength)) &&
+            Number(contentLength) > maxBytes
+        ) {
+            throw new Error(
+                `Download is too large; maximum size is ${maxBytes} bytes`,
+            );
+        }
+
+        const { bytes, truncated } = await readLimitedResponseBytes(
+            response,
+            maxBytes,
+        );
+        if (truncated) {
+            throw new Error(
+                `Download is too large; maximum size is ${maxBytes} bytes`,
+            );
+        }
+
+        return {
+            finalUrl: currentUrl.href,
+            contentType: response.headers.get("content-type") ?? "",
+            bytes,
+        };
+    }
+}
+
 export async function fetchWebsiteContent(
     url: string,
 ): Promise<WebsiteContent> {
@@ -81,7 +172,7 @@ export async function fetchWebsiteContent(
                 redirect: "manual",
                 signal: controller.signal,
                 headers: {
-                    Accept: "text/html,text/plain;q=0.9,*/*;q=0.1",
+                    Accept: "text/html,text/plain,image/*;q=0.9,*/*;q=0.1",
                     "User-Agent": "LLMChat/1.0 (+https://localhost)",
                 },
             });
@@ -110,6 +201,74 @@ export async function fetchWebsiteContent(
         }
 
         const contentType = response.headers.get("content-type") ?? "";
+        const mime = getMimeType(contentType);
+        if (mime.startsWith("image/") || !isReadableContentType(contentType)) {
+            const { bytes, truncated } = await readLimitedResponseBytes(
+                response,
+                MAX_WEBSITE_IMAGE_BYTES,
+            );
+            if (truncated) {
+                throw new Error(
+                    `Image is too large; maximum size is ${MAX_WEBSITE_IMAGE_BYTES} bytes`,
+                );
+            }
+            const imageMimeType = detectImageMimeType(bytes) ?? mime;
+            if (!isSupportedImageMimeType(imageMimeType)) {
+                throw new Error(
+                    contentType
+                        ? `Unsupported content type: ${contentType}`
+                        : "Unsupported content type",
+                );
+            }
+
+            const image = toWebsiteImage(currentUrl, bytes, imageMimeType);
+            return {
+                url: currentUrl.href,
+                title: image.name,
+                content: [
+                    `Image: ${image.name}`,
+                    `MIME type: ${image.mimeType}`,
+                    `Bytes: ${image.bytes}`,
+                    "Displayed to user: true",
+                    "The image bytes were shown in the chat UI; only metadata is provided to the model.",
+                ].join("\n"),
+                contentType: image.mimeType,
+                truncated: false,
+                image,
+            };
+        }
+
+        const bodyReadLimit = contentType
+            ? MAX_WEBSITE_BYTES
+            : MAX_WEBSITE_IMAGE_BYTES;
+        const { bytes, truncated: byteTruncated } =
+            await readLimitedResponseBytes(response, bodyReadLimit);
+        const imageMimeType = contentType
+            ? undefined
+            : detectImageMimeType(bytes);
+        if (imageMimeType) {
+            if (byteTruncated) {
+                throw new Error(
+                    `Image is too large; maximum size is ${bodyReadLimit} bytes`,
+                );
+            }
+            const image = toWebsiteImage(currentUrl, bytes, imageMimeType);
+            return {
+                url: currentUrl.href,
+                title: image.name,
+                content: [
+                    `Image: ${image.name}`,
+                    `MIME type: ${image.mimeType}`,
+                    `Bytes: ${image.bytes}`,
+                    "Displayed to user: true",
+                    "The image bytes were shown in the chat UI; only metadata is provided to the model.",
+                ].join("\n"),
+                contentType: image.mimeType,
+                truncated: byteTruncated,
+                image,
+            };
+        }
+
         if (!isReadableContentType(contentType)) {
             throw new Error(
                 contentType
@@ -118,8 +277,7 @@ export async function fetchWebsiteContent(
             );
         }
 
-        const { text, truncated: byteTruncated } =
-            await readLimitedResponseText(response, MAX_WEBSITE_BYTES);
+        const text = decodeResponse(bytes, contentType);
         const extracted = extractReadableText(
             text,
             currentUrl.href,
@@ -231,7 +389,7 @@ function isReadableContentType(contentType: string) {
         return true;
     }
 
-    const mime = contentType.split(";")[0].trim().toLowerCase();
+    const mime = getMimeType(contentType);
     return (
         mime === "text/html" ||
         mime === "text/plain" ||
@@ -242,12 +400,12 @@ function isReadableContentType(contentType: string) {
     );
 }
 
-async function readLimitedResponseText(
+async function readLimitedResponseBytes(
     response: Response,
     maxBytes: number,
-): Promise<{ text: string; truncated: boolean }> {
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
     if (!response.body) {
-        return { text: "", truncated: false };
+        return { bytes: new Uint8Array(), truncated: false };
     }
 
     const reader = response.body.getReader();
@@ -282,10 +440,7 @@ async function readLimitedResponseText(
         offset += chunk.length;
     }
 
-    return {
-        text: decodeResponse(bytes, response.headers.get("content-type") ?? ""),
-        truncated,
-    };
+    return { bytes, truncated };
 }
 
 function decodeResponse(bytes: Uint8Array, contentType: string) {
@@ -295,6 +450,104 @@ function decodeResponse(bytes: Uint8Array, contentType: string) {
     } catch {
         return new TextDecoder("utf-8").decode(bytes);
     }
+}
+
+function getMimeType(contentType: string) {
+    return contentType.split(";")[0].trim().toLowerCase();
+}
+
+function isSupportedImageMimeType(mimeType: string) {
+    return [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/avif",
+    ].includes(mimeType);
+}
+
+function toWebsiteImage(
+    url: URL,
+    bytes: Uint8Array,
+    mimeType: string,
+): WebsiteImage {
+    const name = decodeURIComponent(
+        pathBasename(url.pathname) ||
+            `image.${extensionForImageMimeType(mimeType)}`,
+    );
+    const buffer = Buffer.from(bytes);
+    return {
+        name,
+        mimeType,
+        bytes: buffer.length,
+        dataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
+    };
+}
+
+function detectImageMimeType(bytes: Uint8Array) {
+    if (
+        bytes.length >= 8 &&
+        bytes[0] === 0x89 &&
+        bytes[1] === 0x50 &&
+        bytes[2] === 0x4e &&
+        bytes[3] === 0x47 &&
+        bytes[4] === 0x0d &&
+        bytes[5] === 0x0a &&
+        bytes[6] === 0x1a &&
+        bytes[7] === 0x0a
+    ) {
+        return "image/png";
+    }
+
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+        return "image/jpeg";
+    }
+
+    const header = Buffer.from(bytes.subarray(0, 12)).toString("ascii");
+    if (header.startsWith("GIF87a") || header.startsWith("GIF89a")) {
+        return "image/gif";
+    }
+
+    if (
+        bytes.length >= 12 &&
+        header.startsWith("RIFF") &&
+        header.endsWith("WEBP")
+    ) {
+        return "image/webp";
+    }
+
+    if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+        return "image/bmp";
+    }
+
+    const brand = Buffer.from(bytes.subarray(4, 32)).toString("ascii");
+    if (brand.includes("ftypavif") || brand.includes("ftypavis")) {
+        return "image/avif";
+    }
+
+    return undefined;
+}
+
+function extensionForImageMimeType(mimeType: string) {
+    switch (mimeType) {
+        case "image/jpeg":
+            return "jpg";
+        case "image/gif":
+            return "gif";
+        case "image/webp":
+            return "webp";
+        case "image/bmp":
+            return "bmp";
+        case "image/avif":
+            return "avif";
+        default:
+            return "png";
+    }
+}
+
+function pathBasename(pathname: string) {
+    return pathname.split("/").filter(Boolean).pop() ?? "";
 }
 
 function extractReadableText(
@@ -368,11 +621,7 @@ function decodeHtmlEntities(text: string) {
 }
 
 function decodeNumericEntity(entity: string, codePoint: number) {
-    if (
-        !Number.isFinite(codePoint) ||
-        codePoint < 0 ||
-        codePoint > 0x10ffff
-    ) {
+    if (!Number.isFinite(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
         return entity;
     }
 
@@ -403,7 +652,7 @@ export const readWebsiteTool = {
     function: {
         name: "read_website",
         description:
-            "Read the text content of a public web page by URL. Use this when the user provides a link, asks about a specific page, or search results need deeper source content.",
+            "Fetch a public URL. Reads text from web pages and downloads direct raster image URLs for display in the chat. Use this when the user provides a link, asks about a specific page or image, or search results need deeper source content.",
         parameters: {
             type: "object",
             properties: {

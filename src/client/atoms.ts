@@ -15,6 +15,13 @@ export interface ToolCall {
 export interface ToolResult {
     toolCallId: string;
     content: string;
+    image?: {
+        path: string;
+        name: string;
+        mimeType: string;
+        bytes: number;
+        dataUrl: string;
+    };
 }
 
 export interface Message {

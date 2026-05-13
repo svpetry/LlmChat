@@ -43,7 +43,17 @@ export interface StreamChunk {
     content?: string;
     thinking?: string;
     toolCall?: { id: string; name: string; arguments: string };
-    toolResult?: { toolCallId: string; content: string };
+    toolResult?: {
+        toolCallId: string;
+        content: string;
+        image?: {
+            path: string;
+            name: string;
+            mimeType: string;
+            bytes: number;
+            dataUrl: string;
+        };
+    };
     clearContent?: boolean;
 }
 
@@ -112,6 +122,7 @@ export async function* streamChat(
                         toolResult: {
                             toolCallId: parsed.toolCallId,
                             content: parsed.content,
+                            image: parsed.image,
                         },
                     };
                     currentEvent = "";

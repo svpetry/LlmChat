@@ -138,7 +138,7 @@ describe("streamChat", () => {
         mockFetch.mockResolvedValue(
             streamResponse([
                 'event: tool_call\ndata: {"id":"call_1","name":"read_home_file","arguments":"{\\"path\\":\\"notes.txt\\"}"}\n\n',
-                'event: tool_result\ndata: {"toolCallId":"call_1","content":"Read ~/notes.txt"}\n\n',
+                'event: tool_result\ndata: {"toolCallId":"call_1","content":"Read ~/notes.txt","image":{"path":"~/photo.png","name":"photo.png","mimeType":"image/png","bytes":68,"dataUrl":"data:image/png;base64,abc"}}\n\n',
                 'data: {"choices":[{"delta":{"content":"Done"}}]}\n\n',
                 "data: [DONE]\n\n",
             ]),
@@ -176,6 +176,13 @@ describe("streamChat", () => {
                 toolResult: {
                     toolCallId: "call_1",
                     content: "Read ~/notes.txt",
+                    image: {
+                        path: "~/photo.png",
+                        name: "photo.png",
+                        mimeType: "image/png",
+                        bytes: 68,
+                        dataUrl: "data:image/png;base64,abc",
+                    },
                 },
             },
             { content: "Done" },

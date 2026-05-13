@@ -130,9 +130,11 @@ function getToolDisplay(toolCall: ToolCall) {
         get_home_path_info: "Inspect path",
         search_home_paths: "Search files",
         read_home_file: "Read file",
+        read_home_image: "Display image",
         search_home_file_text: "Search file text",
         edit_home_file_lines: "Edit file",
         create_home_path: "Create path",
+        download_home_file: "Download file",
         delete_home_path: "Delete path",
     };
 
@@ -422,6 +424,7 @@ export default function ChatScreen() {
                         {
                             toolCallId: chunk.toolResult.toolCallId,
                             content: chunk.toolResult.content,
+                            image: chunk.toolResult.image,
                         },
                     ];
                     setAssistantMessage(
@@ -936,6 +939,45 @@ export default function ChatScreen() {
                                                     </Collapse>
                                                 </Box>
                                             )}
+                                            {msg.toolResults?.map((result) => {
+                                                const image = result.image;
+                                                if (!image) return null;
+                                                return (
+                                                    <Box
+                                                        key={`${result.toolCallId}-image`}
+                                                        sx={{ mb: 1 }}
+                                                    >
+                                                        <Box
+                                                            component="img"
+                                                            src={image.dataUrl}
+                                                            alt={image.name}
+                                                            sx={{
+                                                                display:
+                                                                    "block",
+                                                                maxWidth:
+                                                                    "100%",
+                                                                maxHeight: 520,
+                                                                borderRadius: 1,
+                                                                objectFit:
+                                                                    "contain",
+                                                                bgcolor:
+                                                                    "grey.950",
+                                                            }}
+                                                        />
+                                                        <Typography
+                                                            variant="caption"
+                                                            sx={{
+                                                                color: "grey.500",
+                                                                display:
+                                                                    "block",
+                                                                mt: 0.5,
+                                                            }}
+                                                        >
+                                                            {image.path}
+                                                        </Typography>
+                                                    </Box>
+                                                );
+                                            })}
                                             <Box
                                                 className="markdown-body"
                                                 sx={{

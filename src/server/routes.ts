@@ -334,6 +334,7 @@ router.post("/api/chats/:chatId/generate-title", async (req, res) => {
 // --- Chat with tool call loop ---
 
 const MAX_TOOL_ITERATIONS = 5;
+const CURRENT_DATE_TIME_SYSTEM_PROMPT_PREFIX = "Current date and time:";
 const MEMORY_SYSTEM_PROMPT =
     "Memory is enabled. You have durable memory tools backed by the app database. Use save_memory when the user explicitly asks you to remember, save, or keep a fact or preference for later. Use search_memory when remembered facts or preferences may help answer the user's request. Use list_memories when the user asks what you remember. Use update_memory or delete_memory when the user corrects, changes, or asks you to forget a remembered fact; search or list first if you need the memory id. Use clear_memories only when the user clearly asks to clear all memories. Do not claim you remembered, updated, or forgot something unless the relevant memory tool succeeded.";
 const CHANNEL_LABELS = ["analysis", "commentary", "final", "thought"];
@@ -505,14 +506,35 @@ function toOpenAIMessages(
     });
 }
 
-function addMemorySystemPrompt<T>(messages: T[]): T[] {
-    return [
+function formatCurrentDateTime(date = new Date()): string {
+    return new Intl.DateTimeFormat("en-US", {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+    }).format(date);
+}
+
+function addSystemPrompts<T>(messages: T[], includeMemoryPrompt: boolean): T[] {
+    const systemMessages = [
         {
             role: "system",
-            content: MEMORY_SYSTEM_PROMPT,
+            content: `${CURRENT_DATE_TIME_SYSTEM_PROMPT_PREFIX} ${formatCurrentDateTime()}.`,
         } as T,
-        ...messages,
     ];
+
+    if (includeMemoryPrompt) {
+        systemMessages.push({
+            role: "system",
+            content: MEMORY_SYSTEM_PROMPT,
+        } as T);
+    }
+
+    return [...systemMessages, ...messages];
 }
 
 async function executeSearch(
@@ -547,9 +569,17 @@ async function executeSearch(
     return { results, content };
 }
 
-async function executeReadWebsite(
-    toolCall: OpenAIToolCall,
-): Promise<{ summary: string; content: string }> {
+async function executeReadWebsite(toolCall: OpenAIToolCall): Promise<{
+    summary: string;
+    content: string;
+    image?: {
+        path: string;
+        name: string;
+        mimeType: string;
+        bytes: number;
+        dataUrl: string;
+    };
+}> {
     let args: { url?: string };
     try {
         args = JSON.parse(toolCall.function.arguments);
@@ -560,6 +590,28 @@ async function executeReadWebsite(
     if (!url) throw new Error("Missing url parameter");
 
     const page = await fetchWebsiteContent(url);
+    if (page.image) {
+        const content = [
+            `Title: ${page.title}`,
+            `URL: ${page.url}`,
+            page.truncated ? "Image metadata (truncated):" : "Image metadata:",
+            page.content,
+        ].join("\n");
+        return {
+            summary: `Fetched image ${page.image.name} (${page.url})${
+                page.truncated ? " (truncated)" : ""
+            }`,
+            content,
+            image: {
+                path: page.url,
+                name: page.image.name,
+                mimeType: page.image.mimeType,
+                bytes: page.image.bytes,
+                dataUrl: page.image.dataUrl,
+            },
+        };
+    }
+
     const content = [
         `Title: ${page.title}`,
         `URL: ${page.url}`,
@@ -573,9 +625,17 @@ async function executeReadWebsite(
     return { summary, content };
 }
 
-async function executeToolCall(
-    toolCall: OpenAIToolCall,
-): Promise<{ summary: string; content: string }> {
+async function executeToolCall(toolCall: OpenAIToolCall): Promise<{
+    summary: string;
+    content: string;
+    image?: {
+        path: string;
+        name: string;
+        mimeType: string;
+        bytes: number;
+        dataUrl: string;
+    };
+}> {
     if (toolCall.function.name === "web_search") {
         const { results, content } = await executeSearch(toolCall);
         return {
@@ -786,7 +846,7 @@ async function streamWithTools(
         }[] = [];
         for (const tc of toolCallsArray) {
             try {
-                const { summary, content } = await executeToolCall(tc);
+                const { summary, content, image } = await executeToolCall(tc);
                 toolMessages.push({
                     role: "tool",
                     tool_call_id: tc.id,
@@ -796,6 +856,7 @@ async function streamWithTools(
                     `event: tool_result\ndata: ${JSON.stringify({
                         toolCallId: tc.id,
                         content: summary,
+                        image,
                     })}\n\n`,
                 );
             } catch (err) {
@@ -881,10 +942,10 @@ router.post("/api/chat", async (req, res) => {
     const useTools = tools.length > 0;
 
     try {
-        const openaiMessages =
-            toolsEnabled && memoryEnabled
-                ? addMemorySystemPrompt(toOpenAIMessages(messages))
-                : toOpenAIMessages(messages);
+        const openaiMessages = addSystemPrompts(
+            toOpenAIMessages(messages),
+            !!toolsEnabled && memoryEnabled,
+        );
 
         if (useTools) {
             res.setHeader("Content-Type", "text/event-stream");
