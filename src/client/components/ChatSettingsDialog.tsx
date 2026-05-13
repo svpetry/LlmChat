@@ -15,10 +15,13 @@ import {
     Typography,
 } from "@mui/material";
 import { fileAccessSettingsAtom, searchSettingsAtom } from "../atoms.js";
+import { memorySettingsAtom } from "../atoms.js";
 import {
     fetchFileAccessSettings,
+    fetchMemorySettings,
     fetchSearchSettings,
     saveFileAccessSettings,
+    saveMemorySettings,
     saveSearchSettings,
 } from "../api.js";
 
@@ -30,8 +33,10 @@ interface Props {
 export default function ChatSettingsDialog({ open, onClose }: Props) {
     const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
     const [, setFileAccessSettings] = useAtom(fileAccessSettingsAtom);
+    const [, setMemorySettings] = useAtom(memorySettingsAtom);
     const [enabled, setEnabled] = useState(false);
     const [fileAccessEnabled, setFileAccessEnabled] = useState(false);
+    const [memoryEnabled, setMemoryEnabled] = useState(false);
     const [provider, setProvider] = useState<"brave" | "searxng">("brave");
     const [apiKey, setApiKey] = useState("");
     const [searxngUrl, setSearxngUrl] = useState("");
@@ -44,19 +49,23 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             return;
         }
 
-        Promise.all([fetchSearchSettings(), fetchFileAccessSettings()]).then(
-            ([s, f]) => {
-                setSearchSettings(s);
-                setFileAccessSettings(f);
-                setEnabled(s.enabled);
-                setFileAccessEnabled(f.enabled);
-                setProvider(s.provider);
-                setApiKey("");
-                setSearxngUrl("");
-                setLoaded(true);
-            },
-        );
-    }, [open, setFileAccessSettings, setSearchSettings]);
+        Promise.all([
+            fetchSearchSettings(),
+            fetchFileAccessSettings(),
+            fetchMemorySettings(),
+        ]).then(([s, f, m]) => {
+            setSearchSettings(s);
+            setFileAccessSettings(f);
+            setMemorySettings(m);
+            setEnabled(s.enabled);
+            setFileAccessEnabled(f.enabled);
+            setMemoryEnabled(m.enabled);
+            setProvider(s.provider);
+            setApiKey("");
+            setSearxngUrl("");
+            setLoaded(true);
+        });
+    }, [open, setFileAccessSettings, setMemorySettings, setSearchSettings]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -74,13 +83,17 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             await Promise.all([
                 saveSearchSettings(data),
                 saveFileAccessSettings({ enabled: fileAccessEnabled }),
+                saveMemorySettings({ enabled: memoryEnabled }),
             ]);
-            const [updatedSearch, updatedFileAccess] = await Promise.all([
-                fetchSearchSettings(),
-                fetchFileAccessSettings(),
-            ]);
+            const [updatedSearch, updatedFileAccess, updatedMemory] =
+                await Promise.all([
+                    fetchSearchSettings(),
+                    fetchFileAccessSettings(),
+                    fetchMemorySettings(),
+                ]);
             setSearchSettings(updatedSearch);
             setFileAccessSettings(updatedFileAccess);
+            setMemorySettings(updatedMemory);
             onClose();
         } finally {
             setSaving(false);
@@ -177,6 +190,24 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                             )}
                         </>
                     )}
+
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={memoryEnabled}
+                                    onChange={(e) =>
+                                        setMemoryEnabled(e.target.checked)
+                                    }
+                                />
+                            }
+                            label="Memory"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Allows model tool calls to save and search
+                            remembered facts in the local SQLite database.
+                        </Typography>
+                    </Box>
 
                     <Box>
                         <FormControlLabel

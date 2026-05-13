@@ -45,6 +45,10 @@ export interface FileAccessSettings {
     enabled: boolean;
 }
 
+export interface MemorySettings {
+    enabled: boolean;
+}
+
 export const defaultConnection: ConnectionState = {
     baseUrl: "",
     apiKey: "",
@@ -63,6 +67,9 @@ export const searchSettingsAtom = atom<SearchSettings>({
     searxngUrlSet: false,
 });
 export const fileAccessSettingsAtom = atom<FileAccessSettings>({
+    enabled: false,
+});
+export const memorySettingsAtom = atom<MemorySettings>({
     enabled: false,
 });
 

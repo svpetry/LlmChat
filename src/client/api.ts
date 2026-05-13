@@ -1,6 +1,7 @@
 import type {
     ChatSummary,
     FileAccessSettings,
+    MemorySettings,
     Message,
     SearchSettings,
 } from "./atoms";
@@ -161,6 +162,22 @@ export async function saveFileAccessSettings(data: {
     enabled?: boolean;
 }): Promise<{ ok: boolean }> {
     const res = await fetch(`${API}/file-access-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
+export async function fetchMemorySettings(): Promise<MemorySettings> {
+    const res = await fetch(`${API}/memory-settings`);
+    return res.json();
+}
+
+export async function saveMemorySettings(data: {
+    enabled?: boolean;
+}): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/memory-settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

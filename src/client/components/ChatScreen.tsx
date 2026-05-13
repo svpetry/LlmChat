@@ -28,6 +28,8 @@ import {
     defaultConnection,
     fileAccessSettingsAtom,
     type FileAccessSettings,
+    memorySettingsAtom,
+    type MemorySettings,
     type MessageStats,
     type SearchSettings,
     type ToolCall,
@@ -40,6 +42,7 @@ import {
 } from "../atoms.js";
 import {
     fetchFileAccessSettings,
+    fetchMemorySettings,
     fetchSearchSettings,
     streamChat,
     fetchChats,
@@ -55,8 +58,13 @@ import ChatSidebar from "./ChatSidebar.js";
 function canUseTools(
     searchSettings: SearchSettings,
     fileAccessSettings: FileAccessSettings,
+    memorySettings: MemorySettings,
 ) {
-    return searchSettings.enabled || fileAccessSettings.enabled;
+    return (
+        searchSettings.enabled ||
+        fileAccessSettings.enabled ||
+        memorySettings.enabled
+    );
 }
 
 function getToolDisplay(toolCall: ToolCall) {
@@ -79,6 +87,42 @@ function getToolDisplay(toolCall: ToolCall) {
             label: "Read website",
             detail: typeof args.url === "string" ? args.url : "",
         };
+    }
+
+    if (toolCall.name === "save_memory") {
+        return {
+            label: "Save memory",
+            detail: typeof args.content === "string" ? args.content : "",
+        };
+    }
+
+    if (toolCall.name === "search_memory") {
+        return {
+            label: "Search memory",
+            detail: typeof args.query === "string" ? args.query : "",
+        };
+    }
+
+    if (toolCall.name === "list_memories") {
+        return { label: "List memories", detail: "" };
+    }
+
+    if (toolCall.name === "update_memory") {
+        return {
+            label: "Update memory",
+            detail: typeof args.content === "string" ? args.content : "",
+        };
+    }
+
+    if (toolCall.name === "delete_memory") {
+        return {
+            label: "Delete memory",
+            detail: typeof args.id === "string" ? args.id : "",
+        };
+    }
+
+    if (toolCall.name === "clear_memories") {
+        return { label: "Clear memories", detail: "" };
     }
 
     const fileToolLabels: Record<string, string> = {
@@ -113,6 +157,7 @@ export default function ChatScreen() {
     const [fileAccessSettings, setFileAccessSettings] = useAtom(
         fileAccessSettingsAtom,
     );
+    const [memorySettings, setMemorySettings] = useAtom(memorySettingsAtom);
     const [activeChatId, setActiveChatId] = useAtom(activeChatIdAtom);
     const [chatList, setChatList] = useAtom(chatListAtom);
     const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
@@ -131,6 +176,9 @@ export default function ChatScreen() {
     );
     const fileAccessSettingsPromiseRef =
         useRef<Promise<FileAccessSettings> | null>(null);
+    const memorySettingsPromiseRef = useRef<Promise<MemorySettings> | null>(
+        null,
+    );
     const initializedRef = useRef(false);
 
     const scrollToBottom = () => {
@@ -150,14 +198,18 @@ export default function ChatScreen() {
             searchSettingsPromiseRef.current ?? fetchSearchSettings();
         const fileAccessLoad =
             fileAccessSettingsPromiseRef.current ?? fetchFileAccessSettings();
+        const memoryLoad =
+            memorySettingsPromiseRef.current ?? fetchMemorySettings();
         searchSettingsPromiseRef.current = searchLoad;
         fileAccessSettingsPromiseRef.current = fileAccessLoad;
+        memorySettingsPromiseRef.current = memoryLoad;
 
-        Promise.all([searchLoad, fileAccessLoad])
-            .then(([settings, fileSettings]) => {
+        Promise.all([searchLoad, fileAccessLoad, memoryLoad])
+            .then(([settings, fileSettings, memory]) => {
                 if (cancelled) return;
                 setSearchSettings(settings);
                 setFileAccessSettings(fileSettings);
+                setMemorySettings(memory);
             })
             .catch(() => {
                 // Leave tools disabled if settings cannot be loaded.
@@ -167,12 +219,13 @@ export default function ChatScreen() {
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
+                memorySettingsPromiseRef.current = null;
             });
 
         return () => {
             cancelled = true;
         };
-    }, [setFileAccessSettings, setSearchSettings]);
+    }, [setFileAccessSettings, setMemorySettings, setSearchSettings]);
 
     // Load chat list and initialize on mount
     useEffect(() => {
@@ -266,6 +319,7 @@ export default function ChatScreen() {
 
         let searchSettingsForSend = searchSettings;
         let fileAccessSettingsForSend = fileAccessSettings;
+        let memorySettingsForSend = memorySettings;
         if (!searchSettingsLoaded) {
             try {
                 const searchLoad =
@@ -273,24 +327,34 @@ export default function ChatScreen() {
                 const fileAccessLoad =
                     fileAccessSettingsPromiseRef.current ??
                     fetchFileAccessSettings();
+                const memoryLoad =
+                    memorySettingsPromiseRef.current ?? fetchMemorySettings();
                 searchSettingsPromiseRef.current = searchLoad;
                 fileAccessSettingsPromiseRef.current = fileAccessLoad;
-                [searchSettingsForSend, fileAccessSettingsForSend] =
-                    await Promise.all([searchLoad, fileAccessLoad]);
+                memorySettingsPromiseRef.current = memoryLoad;
+                [
+                    searchSettingsForSend,
+                    fileAccessSettingsForSend,
+                    memorySettingsForSend,
+                ] = await Promise.all([searchLoad, fileAccessLoad, memoryLoad]);
                 setSearchSettings(searchSettingsForSend);
                 setFileAccessSettings(fileAccessSettingsForSend);
+                setMemorySettings(memorySettingsForSend);
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
+                memorySettingsPromiseRef.current = null;
             } catch {
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
+                memorySettingsPromiseRef.current = null;
             }
         }
         const toolsEnabled = canUseTools(
             searchSettingsForSend,
             fileAccessSettingsForSend,
+            memorySettingsForSend,
         );
 
         const setAssistantMessage = (

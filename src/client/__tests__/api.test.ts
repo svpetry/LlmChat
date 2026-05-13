@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
     fetchFileAccessSettings,
+    fetchMemorySettings,
     fetchSearchSettings,
+    saveMemorySettings,
     saveFileAccessSettings,
     saveSearchSettings,
     streamChat,
@@ -101,6 +103,29 @@ describe("settings API helpers", () => {
         ).resolves.toEqual({ ok: true });
 
         expect(mockFetch).toHaveBeenCalledWith("/api/file-access-settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true }),
+        });
+    });
+
+    it("fetches memory settings", async () => {
+        mockFetch.mockResolvedValue(jsonResponse({ enabled: true }));
+
+        await expect(fetchMemorySettings()).resolves.toEqual({
+            enabled: true,
+        });
+        expect(mockFetch).toHaveBeenCalledWith("/api/memory-settings");
+    });
+
+    it("saves memory settings", async () => {
+        mockFetch.mockResolvedValue(jsonResponse({ ok: true }));
+
+        await expect(saveMemorySettings({ enabled: true })).resolves.toEqual({
+            ok: true,
+        });
+
+        expect(mockFetch).toHaveBeenCalledWith("/api/memory-settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: true }),

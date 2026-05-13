@@ -21,6 +21,7 @@ import {
     type SearchResult,
 } from "./search.js";
 import { executeHomeFileTool, homeFileTools } from "./fileAccess.js";
+import { executeMemoryTool, memoryTools } from "./memory.js";
 
 export const router = Router();
 
@@ -112,6 +113,23 @@ router.post("/api/file-access-settings", (req, res) => {
     const { enabled } = req.body as { enabled?: boolean };
     if (enabled !== undefined) {
         setSetting("homeFileAccessEnabled", String(enabled));
+    }
+    res.json({ ok: true });
+});
+
+// --- Memory settings ---
+
+router.get("/api/memory-settings", (_req, res) => {
+    const settings = getAllSettings();
+    res.json({
+        enabled: settings.memoryEnabled === "true",
+    });
+});
+
+router.post("/api/memory-settings", (req, res) => {
+    const { enabled } = req.body as { enabled?: boolean };
+    if (enabled !== undefined) {
+        setSetting("memoryEnabled", String(enabled));
     }
     res.json({ ok: true });
 });
@@ -316,6 +334,8 @@ router.post("/api/chats/:chatId/generate-title", async (req, res) => {
 // --- Chat with tool call loop ---
 
 const MAX_TOOL_ITERATIONS = 5;
+const MEMORY_SYSTEM_PROMPT =
+    "Memory is enabled. You have durable memory tools backed by the app database. Use save_memory when the user explicitly asks you to remember, save, or keep a fact or preference for later. Use search_memory when remembered facts or preferences may help answer the user's request. Use list_memories when the user asks what you remember. Use update_memory or delete_memory when the user corrects, changes, or asks you to forget a remembered fact; search or list first if you need the memory id. Use clear_memories only when the user clearly asks to clear all memories. Do not claim you remembered, updated, or forgot something unless the relevant memory tool succeeded.";
 const CHANNEL_LABELS = ["analysis", "commentary", "final", "thought"];
 const CONTROL_TOKEN_NAMES = [
     "call",
@@ -350,7 +370,8 @@ interface OpenAIToolCall {
 type ChatTool =
     | typeof webSearchTool
     | typeof readWebsiteTool
-    | (typeof homeFileTools)[number];
+    | (typeof homeFileTools)[number]
+    | (typeof memoryTools)[number];
 
 class LeadingChannelMarkupSanitizer {
     private buffer = "";
@@ -484,6 +505,16 @@ function toOpenAIMessages(
     });
 }
 
+function addMemorySystemPrompt<T>(messages: T[]): T[] {
+    return [
+        {
+            role: "system",
+            content: MEMORY_SYSTEM_PROMPT,
+        } as T,
+        ...messages,
+    ];
+}
+
 async function executeSearch(
     toolCall: OpenAIToolCall,
 ): Promise<{ results: SearchResult[]; content: string }> {
@@ -566,6 +597,20 @@ async function executeToolCall(
             throw new Error("Home directory file access is disabled");
         }
         return executeHomeFileTool(
+            toolCall.function.name,
+            toolCall.function.arguments,
+        );
+    }
+
+    if (
+        memoryTools.some(
+            (tool) => tool.function.name === toolCall.function.name,
+        )
+    ) {
+        if (getSetting("memoryEnabled") !== "true") {
+            throw new Error("Memory is disabled");
+        }
+        return executeMemoryTool(
             toolCall.function.name,
             toolCall.function.arguments,
         );
@@ -813,6 +858,7 @@ router.post("/api/chat", async (req, res) => {
     }
 
     const searchEnabled = getSetting("searchEnabled") === "true";
+    const memoryEnabled = getSetting("memoryEnabled") === "true";
     const searchProvider = getSetting("searchProvider") ?? "brave";
     const hasSearchCredentials =
         searchProvider === "searxng"
@@ -829,10 +875,16 @@ router.post("/api/chat", async (req, res) => {
     if (toolsEnabled && getSetting("homeFileAccessEnabled") === "true") {
         tools.push(...homeFileTools);
     }
+    if (toolsEnabled && memoryEnabled) {
+        tools.push(...memoryTools);
+    }
     const useTools = tools.length > 0;
 
     try {
-        const openaiMessages = toOpenAIMessages(messages);
+        const openaiMessages =
+            toolsEnabled && memoryEnabled
+                ? addMemorySystemPrompt(toOpenAIMessages(messages))
+                : toOpenAIMessages(messages);
 
         if (useTools) {
             res.setHeader("Content-Type", "text/event-stream");

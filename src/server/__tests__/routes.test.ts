@@ -17,6 +17,12 @@ const mockDeleteChat = vi.fn();
 const mockListChats = vi.fn();
 const mockCreateMessage = vi.fn();
 const mockGetMessagesByChat = vi.fn();
+const mockCreateMemory = vi.fn();
+const mockSearchMemories = vi.fn();
+const mockListMemories = vi.fn();
+const mockUpdateMemory = vi.fn();
+const mockDeleteMemory = vi.fn();
+const mockClearMemories = vi.fn();
 
 vi.mock("../database.js", () => ({
     getSetting: mockGetSetting,
@@ -30,6 +36,12 @@ vi.mock("../database.js", () => ({
     listChats: mockListChats,
     createMessage: mockCreateMessage,
     getMessagesByChat: mockGetMessagesByChat,
+    createMemory: mockCreateMemory,
+    searchMemories: mockSearchMemories,
+    listMemories: mockListMemories,
+    updateMemory: mockUpdateMemory,
+    deleteMemory: mockDeleteMemory,
+    clearMemories: mockClearMemories,
 }));
 
 vi.mock("../search.js", () => ({
@@ -214,6 +226,38 @@ describe("file access settings", () => {
             "homeFileAccessEnabled",
             "true",
         );
+    });
+});
+
+describe("memory settings", () => {
+    it("defaults memory to disabled", async () => {
+        mockGetAllSettings.mockReturnValue({});
+
+        const res = await request(createApp()).get("/api/memory-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: false });
+    });
+
+    it("returns stored memory setting", async () => {
+        mockGetAllSettings.mockReturnValue({
+            memoryEnabled: "true",
+        });
+
+        const res = await request(createApp()).get("/api/memory-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: true });
+    });
+
+    it("saves memory setting", async () => {
+        const res = await request(createApp())
+            .post("/api/memory-settings")
+            .send({ enabled: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ ok: true });
+        expect(mockSetSetting).toHaveBeenCalledWith("memoryEnabled", "true");
     });
 });
 
@@ -742,6 +786,348 @@ describe("POST /api/chat", () => {
                 content: "file contents",
             }),
         );
+    });
+
+    it("advertises memory tools and tells the model about memory when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "memoryEnabled") return "true";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue(
+            createStreamResponse([
+                sseData({
+                    choices: [{ delta: { content: "Ready." } }],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "remember things" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            messages: { role: string; content: string }[];
+            tools: { function: { name: string } }[];
+        };
+        expect(body.tools.map((tool) => tool.function.name)).toEqual([
+            "save_memory",
+            "search_memory",
+            "list_memories",
+            "update_memory",
+            "delete_memory",
+            "clear_memories",
+        ]);
+        expect(body.messages[0]).toEqual(
+            expect.objectContaining({
+                role: "system",
+                content: expect.stringContaining("Memory is enabled"),
+            }),
+        );
+    });
+
+    it("executes memory save tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "memoryEnabled") return "true";
+            return undefined;
+        });
+        mockCreateMemory.mockReturnValue({
+            id: "mem-1",
+            content: "User prefers concise answers",
+            importance: 3,
+            created_at: 1000,
+            updated_at: 1000,
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_memory",
+                                            type: "function",
+                                            function: {
+                                                name: "save_memory",
+                                                arguments:
+                                                    '{"content":"User prefers concise answers"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "I will remember it." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [
+                    {
+                        role: "user",
+                        content: "Remember that I prefer concise answers",
+                    },
+                ],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Saved memory");
+        expect(res.text).toContain("I will remember it.");
+        expect(mockCreateMemory).toHaveBeenCalledWith(
+            expect.any(String),
+            "User prefers concise answers",
+            undefined,
+        );
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: expect.stringContaining(
+                    "User prefers concise answers",
+                ),
+            }),
+        );
+    });
+
+    it("executes memory search tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "memoryEnabled") return "true";
+            return undefined;
+        });
+        mockSearchMemories.mockReturnValue([
+            {
+                id: "mem-espresso",
+                content: "User loves espresso",
+                importance: 5,
+                created_at: 1000,
+                updated_at: 2000,
+            },
+        ]);
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_search_memory",
+                                            type: "function",
+                                            function: {
+                                                name: "search_memory",
+                                                arguments:
+                                                    '{"query":"coffee preferences","maxResults":3}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [{ delta: { content: "You like espresso." } }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "What coffee do I like?" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Found 1 memory");
+        expect(res.text).toContain("You like espresso.");
+        expect(mockSearchMemories).toHaveBeenCalledWith(
+            "coffee preferences",
+            3,
+        );
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: expect.stringContaining("User loves espresso"),
+            }),
+        );
+    });
+
+    it("executes memory management tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "memoryEnabled") return "true";
+            return undefined;
+        });
+        mockListMemories.mockReturnValue([
+            {
+                id: "mem-1",
+                content: "User likes espresso",
+                importance: 3,
+                created_at: 1000,
+                updated_at: 1000,
+            },
+        ]);
+        mockUpdateMemory.mockReturnValue({
+            id: "mem-1",
+            content: "User prefers matcha",
+            importance: 4,
+            created_at: 1000,
+            updated_at: 2000,
+        });
+        mockDeleteMemory.mockReturnValue(true);
+        mockClearMemories.mockReturnValue(1);
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_list_memories",
+                                            type: "function",
+                                            function: {
+                                                name: "list_memories",
+                                                arguments: '{"maxResults":5}',
+                                            },
+                                        },
+                                        {
+                                            index: 1,
+                                            id: "call_update_memory",
+                                            type: "function",
+                                            function: {
+                                                name: "update_memory",
+                                                arguments:
+                                                    '{"id":"mem-1","content":"User prefers matcha","importance":4}',
+                                            },
+                                        },
+                                        {
+                                            index: 2,
+                                            id: "call_delete_memory",
+                                            type: "function",
+                                            function: {
+                                                name: "delete_memory",
+                                                arguments: '{"id":"mem-1"}',
+                                            },
+                                        },
+                                        {
+                                            index: 3,
+                                            id: "call_clear_memories",
+                                            type: "function",
+                                            function: {
+                                                name: "clear_memories",
+                                                arguments: '{"confirm":true}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "Memory is up to date." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "Update my memories" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Listed 1 memory");
+        expect(res.text).toContain("Updated memory");
+        expect(res.text).toContain("Deleted memory");
+        expect(res.text).toContain("Cleared 1 memory");
+        expect(res.text).toContain("Memory is up to date.");
+        expect(mockListMemories).toHaveBeenCalledWith(5);
+        expect(mockUpdateMemory).toHaveBeenCalledWith(
+            "mem-1",
+            "User prefers matcha",
+            4,
+        );
+        expect(mockDeleteMemory).toHaveBeenCalledWith("mem-1");
+        expect(mockClearMemories).toHaveBeenCalled();
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        const toolMessages = secondBody.messages.filter(
+            (message) => message.role === "tool",
+        );
+        expect(toolMessages).toHaveLength(4);
     });
 
     it("forwards upstream API error", async () => {

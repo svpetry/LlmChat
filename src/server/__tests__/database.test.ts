@@ -1,5 +1,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { getSetting, setSetting, getAllSettings, createChat, getChat, updateChatTitle, deleteChat, listChats, createMessage, getMessagesByChat } from "../database.js";
+import { randomUUID } from "node:crypto";
+import {
+    getSetting,
+    setSetting,
+    getAllSettings,
+    createChat,
+    getChat,
+    updateChatTitle,
+    deleteChat,
+    listChats,
+    createMessage,
+    getMessagesByChat,
+    createMemory,
+    deleteMemory,
+    getMemory,
+    searchMemories,
+    updateMemory,
+} from "../database.js";
 
 describe("database", () => {
     beforeEach(() => {
@@ -118,7 +135,11 @@ describe("messages", () => {
             chat_id: chatId,
             role: "assistant",
             content: "Hi there",
-            stats: JSON.stringify({ ppTime: 100, tokensPerSec: 50, tokenCount: 10 }),
+            stats: JSON.stringify({
+                ppTime: 100,
+                tokensPerSec: 50,
+                tokenCount: 10,
+            }),
             created_at: Date.now(),
         });
 
@@ -141,8 +162,16 @@ describe("messages", () => {
             chat_id: chatId,
             role: "assistant",
             content: "",
-            tool_calls: JSON.stringify([{ id: "tc-1", name: "web_search", arguments: '{"query":"test"}' }]),
-            tool_results: JSON.stringify([{ toolCallId: "tc-1", content: "result" }]),
+            tool_calls: JSON.stringify([
+                {
+                    id: "tc-1",
+                    name: "web_search",
+                    arguments: '{"query":"test"}',
+                },
+            ]),
+            tool_results: JSON.stringify([
+                { toolCallId: "tc-1", content: "result" },
+            ]),
             created_at: Date.now(),
         });
 
@@ -154,5 +183,81 @@ describe("messages", () => {
         expect(JSON.parse(msgs[0].tool_results!)).toEqual([
             { toolCallId: "tc-1", content: "result" },
         ]);
+    });
+});
+
+describe("memories", () => {
+    it("creates and searches memories", () => {
+        const conciseId = `memory-test-${randomUUID()}`;
+        const typescriptId = `memory-test-${randomUUID()}`;
+        createMemory(conciseId, "User prefers concise answers");
+        createMemory(typescriptId, "User likes TypeScript examples");
+
+        const matches = searchMemories("concise", 5);
+
+        expect(matches).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    id: conciseId,
+                    content: "User prefers concise answers",
+                }),
+            ]),
+        );
+        expect(matches.some((memory) => memory.id === typescriptId)).toBe(
+            false,
+        );
+        deleteMemory(conciseId);
+        deleteMemory(typescriptId);
+    });
+
+    it("escapes wildcard characters in memory searches", () => {
+        const wildcardId = `memory-test-${randomUUID()}`;
+        const otherId = `memory-test-${randomUUID()}`;
+        createMemory(wildcardId, "Literal 100% preference");
+        createMemory(otherId, "Another preference");
+
+        const matches = searchMemories("100%", 5);
+
+        expect(matches.map((memory) => memory.id)).toContain(wildcardId);
+        expect(matches.map((memory) => memory.id)).not.toContain(otherId);
+        deleteMemory(wildcardId);
+        deleteMemory(otherId);
+    });
+
+    it("finds related memory terms and prioritizes importance", () => {
+        const espressoId = `memory-test-${randomUUID()}`;
+        const otherId = `memory-test-${randomUUID()}`;
+        createMemory(espressoId, "User loves espresso", 5);
+        createMemory(otherId, "User likes quiet offices", 1);
+
+        const matches = searchMemories("coffee preferences", 5);
+
+        expect(matches[0]).toEqual(
+            expect.objectContaining({
+                id: espressoId,
+                importance: 5,
+            }),
+        );
+        expect(matches.map((memory) => memory.id)).not.toContain(otherId);
+        deleteMemory(espressoId);
+        deleteMemory(otherId);
+    });
+
+    it("updates and deletes memories", () => {
+        const memoryId = `memory-test-${randomUUID()}`;
+        createMemory(memoryId, "User likes espresso", 2);
+
+        const updated = updateMemory(memoryId, "User prefers matcha", 4);
+
+        expect(updated).toEqual(
+            expect.objectContaining({
+                id: memoryId,
+                content: "User prefers matcha",
+                importance: 4,
+            }),
+        );
+        expect(getMemory(memoryId)?.content).toBe("User prefers matcha");
+        expect(deleteMemory(memoryId)).toBe(true);
+        expect(getMemory(memoryId)).toBeUndefined();
     });
 });

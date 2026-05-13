@@ -93,9 +93,6 @@ importers:
       eslint-plugin-react-hooks:
         specifier: ^5.2.0
         version: 5.2.0(eslint@9.39.4(jiti@2.7.0))
-      pnpm:
-        specifier: 11.1.0
-        version: 11.1.0
       prettier:
         specifier: ^3.8.3
         version: 3.8.3
@@ -2606,11 +2603,6 @@ packages:
   plist@3.1.1:
     resolution: {integrity: sha512-ZIfcLJC+7E7FBFnDxm9MPmt7D+DidyQ26lewieO75AdhA2ayMtsJSES0iWzqJQbcVRSrTufQoy0DR94xHue0oA==}
     engines: {node: '>=10.4.0'}
-
-  pnpm@11.1.0:
-    resolution: {integrity: sha512-DEToQuVoaywGGoGt2osiWL2IGOlwSyzyxj1WuTGnsukQCS4IUCcAO5bKORGrVqB/bfWrrtK+mSUDTN1oalNbFA==}
-    engines: {node: '>=22.13'}
-    hasBin: true
 
   postcss@8.5.14:
     resolution: {integrity: sha512-SoSL4+OSEtR99LHFZQiJLkT59C5B1amGO1NzTwj7TT1qCUgUO6hxOvzkOYxD+vMrXBM3XJIKzokoERdqQq/Zmg==}
@@ -6156,8 +6148,6 @@ snapshots:
       base64-js: 1.5.1
       xmlbuilder: 15.1.1
     optional: true
-
-  pnpm@11.1.0: {}
 
   postcss@8.5.14:
     dependencies:
