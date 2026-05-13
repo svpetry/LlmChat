@@ -701,6 +701,87 @@ describe("POST /api/chat", () => {
         expect(JSON.stringify(secondBody)).not.toContain("data:image/png");
     });
 
+    it("routes URL-shaped web_search calls through read_website instead of Brave", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            if (key === "searchApiKey") return "search-key";
+            return undefined;
+        });
+        mockFetchWebsiteContent.mockResolvedValue({
+            title: "cdn.waifu.im",
+            url: "https://cdn.waifu.im/api/v1/images/random",
+            content: JSON.stringify({
+                images: [{ url: "https://cdn.waifu.im/image.png" }],
+            }),
+            contentType: "application/json",
+            truncated: false,
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_wrong_tool",
+                                            type: "function",
+                                            function: {
+                                                name: "web_search",
+                                                arguments:
+                                                    '{"query":"https://cdn.waifu.im/api/v1/images/random"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "I found the image URL." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [
+                    {
+                        role: "user",
+                        content:
+                            "show https://cdn.waifu.im/api/v1/images/random",
+                    },
+                ],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Read cdn.waifu.im");
+        expect(mockFetchWebsiteContent).toHaveBeenCalledWith(
+            "https://cdn.waifu.im/api/v1/images/random",
+        );
+        expect(mockSearchBrave).not.toHaveBeenCalled();
+    });
+
     it("advertises home file tools only when home file access is enabled", async () => {
         mockGetSetting.mockImplementation((key: string) => {
             if (key === "baseUrl") return "http://llm.example.com/v1";

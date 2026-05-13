@@ -91,6 +91,34 @@ describe("fetchWebsiteContent", () => {
         expect(result.image?.mimeType).toBe("image/png");
     });
 
+    it("reads JSON API responses as model-visible text", async () => {
+        const body = Buffer.from(
+            JSON.stringify({
+                images: [
+                    {
+                        url: "https://cdn.example.com/image.png",
+                        width: 800,
+                        height: 600,
+                    },
+                ],
+            }),
+        );
+        mockFetch.mockResolvedValue(
+            streamResponse(body, { "content-type": "application/json" }),
+        );
+
+        const result = await fetchWebsiteContent(
+            "https://api.example.com/random-image",
+        );
+
+        expect(result.title).toBe("api.example.com");
+        expect(result.contentType).toBe("application/json");
+        expect(result.content).toContain(
+            '"url": "https://cdn.example.com/image.png"',
+        );
+        expect(result.image).toBeUndefined();
+    });
+
     it("downloads public URL bytes for filesystem tools", async () => {
         const bytes = Buffer.from([0, 1, 2, 3]);
         mockFetch.mockResolvedValue(

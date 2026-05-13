@@ -539,7 +539,17 @@ function addSystemPrompts<T>(messages: T[], includeMemoryPrompt: boolean): T[] {
 
 async function executeSearch(
     toolCall: OpenAIToolCall,
-): Promise<{ results: SearchResult[]; content: string }> {
+): Promise<{
+    summary: string;
+    content: string;
+    image?: {
+        path: string;
+        name: string;
+        mimeType: string;
+        bytes: number;
+        dataUrl: string;
+    };
+}> {
     let args: { query?: string };
     try {
         args = JSON.parse(toolCall.function.arguments);
@@ -548,6 +558,11 @@ async function executeSearch(
     }
     const query = args.query;
     if (!query) throw new Error("Missing query parameter");
+
+    const directUrl = parseDirectHttpUrl(query);
+    if (directUrl) {
+        return readWebsiteUrl(directUrl);
+    }
 
     const provider = getSetting("searchProvider") ?? "brave";
     let results: SearchResult[];
@@ -566,10 +581,25 @@ async function executeSearch(
         .map((r) => `[${r.title}](${r.url})\n${r.snippet}`)
         .join("\n\n");
 
-    return { results, content };
+    return {
+        summary: results.map((r) => r.title).join(", "),
+        content,
+    };
 }
 
-async function executeReadWebsite(toolCall: OpenAIToolCall): Promise<{
+function parseDirectHttpUrl(input: string) {
+    const trimmed = input.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return undefined;
+
+    try {
+        const url = new URL(trimmed);
+        return url.href;
+    } catch {
+        return undefined;
+    }
+}
+
+async function readWebsiteUrl(url: string): Promise<{
     summary: string;
     content: string;
     image?: {
@@ -580,15 +610,6 @@ async function executeReadWebsite(toolCall: OpenAIToolCall): Promise<{
         dataUrl: string;
     };
 }> {
-    let args: { url?: string };
-    try {
-        args = JSON.parse(toolCall.function.arguments);
-    } catch {
-        throw new Error("Invalid tool call arguments");
-    }
-    const url = args.url;
-    if (!url) throw new Error("Missing url parameter");
-
     const page = await fetchWebsiteContent(url);
     if (page.image) {
         const content = [
@@ -625,6 +646,19 @@ async function executeReadWebsite(toolCall: OpenAIToolCall): Promise<{
     return { summary, content };
 }
 
+async function executeReadWebsite(toolCall: OpenAIToolCall) {
+    let args: { url?: string };
+    try {
+        args = JSON.parse(toolCall.function.arguments);
+    } catch {
+        throw new Error("Invalid tool call arguments");
+    }
+    const url = args.url;
+    if (!url) throw new Error("Missing url parameter");
+
+    return readWebsiteUrl(url);
+}
+
 async function executeToolCall(toolCall: OpenAIToolCall): Promise<{
     summary: string;
     content: string;
@@ -637,11 +671,7 @@ async function executeToolCall(toolCall: OpenAIToolCall): Promise<{
     };
 }> {
     if (toolCall.function.name === "web_search") {
-        const { results, content } = await executeSearch(toolCall);
-        return {
-            summary: results.map((r) => r.title).join(", "),
-            content,
-        };
+        return executeSearch(toolCall);
     }
 
     if (toolCall.function.name === "read_website") {

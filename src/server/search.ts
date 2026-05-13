@@ -172,7 +172,7 @@ export async function fetchWebsiteContent(
                 redirect: "manual",
                 signal: controller.signal,
                 headers: {
-                    Accept: "text/html,text/plain,image/*;q=0.9,*/*;q=0.1",
+                    Accept: "text/html,text/plain,application/json,image/*;q=0.9,*/*;q=0.1",
                     "User-Agent": "LLMChat/1.0 (+https://localhost)",
                 },
             });
@@ -393,6 +393,8 @@ function isReadableContentType(contentType: string) {
     return (
         mime === "text/html" ||
         mime === "text/plain" ||
+        mime === "application/json" ||
+        mime.endsWith("+json") ||
         mime === "application/xhtml+xml" ||
         mime === "application/xml" ||
         mime === "text/xml" ||
@@ -556,6 +558,13 @@ function extractReadableText(
     contentType: string,
 ): { title: string; content: string } {
     const mime = contentType.split(";")[0].trim().toLowerCase();
+    if (mime === "application/json" || mime.endsWith("+json")) {
+        return {
+            title: new URL(url).hostname,
+            content: normalizeText(formatJsonForModel(raw)),
+        };
+    }
+
     if (mime && !mime.includes("html") && !mime.includes("xml")) {
         return {
             title: new URL(url).hostname,
@@ -593,6 +602,14 @@ function normalizeText(text: string) {
         .replace(/ *\n */g, "\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+}
+
+function formatJsonForModel(raw: string) {
+    try {
+        return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+        return raw;
+    }
 }
 
 function decodeHtmlEntities(text: string) {
@@ -633,13 +650,14 @@ export const webSearchTool = {
     function: {
         name: "web_search",
         description:
-            "Search the web for current information. Use this when you need up-to-date facts, recent events, or information beyond your training data.",
+            "Search the web for current information using search terms. Use this when you need up-to-date facts, recent events, or information beyond your training data. Do not use this for URLs; use read_website for any http or https link, including API endpoints and image links.",
         parameters: {
             type: "object",
             properties: {
                 query: {
                     type: "string",
-                    description: "The search query",
+                    description:
+                        "Search terms only. Must not be a URL; use read_website for links.",
                 },
             },
             required: ["query"],
