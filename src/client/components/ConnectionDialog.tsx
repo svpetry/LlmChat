@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAtom } from "jotai";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     Box,
     Button,
@@ -23,6 +23,7 @@ export default function ConnectionDialog() {
     const [baseUrl, setBaseUrl] = useState("");
     const [apiKey, setApiKey] = useState("");
     const [error, setError] = useState("");
+    const queryClient = useQueryClient();
 
     useQuery({
         queryKey: ["settings"],
@@ -49,14 +50,26 @@ export default function ConnectionDialog() {
             await saveMutation.mutateAsync({ baseUrl, apiKey });
             return fetchModels();
         },
-        onSuccess: (data) => {
+        onSuccess: async (data) => {
             setConnection((prev) => ({
                 ...prev,
                 baseUrl,
                 apiKey,
                 models: data.models,
+                selectedModel: "",
             }));
             setError("");
+            // Refetch settings to get the saved model for this URL
+            const settings = await queryClient.fetchQuery({
+                queryKey: ["settings"],
+                queryFn: fetchSettings,
+            });
+            if (settings.selectedModel) {
+                setConnection((prev) => ({
+                    ...prev,
+                    selectedModel: settings.selectedModel,
+                }));
+            }
         },
         onError: (err: Error) => {
             setError(err.message);

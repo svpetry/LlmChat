@@ -2321,7 +2321,8 @@ describe("POST /api/chats/:chatId/generate-title", () => {
         mockGetSetting.mockImplementation((key: string) => {
             if (key === "baseUrl") return "http://llm.example.com/v1";
             if (key === "apiKey") return "key";
-            if (key === "selectedModel") return "fallback-model";
+            if (key === "modelForUrl:http://llm.example.com/v1")
+                return "fallback-model";
             return undefined;
         });
         mockFetch.mockResolvedValue({

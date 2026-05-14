@@ -160,7 +160,8 @@ chatsRouter.post("/api/chats/:chatId/generate-title", async (req, res) => {
 
     const baseUrl = (getSetting("baseUrl") ?? "").replace(/\/+$/, "");
     const apiKey = getSetting("apiKey") ?? "";
-    const model = chat.model || getSetting("selectedModel") || "";
+    const savedModel = getSetting(`modelForUrl:${baseUrl}`);
+    const model = chat.model || savedModel || "";
 
     if (!baseUrl || !model) {
         res.status(400).json({ error: "LLM not configured" });

@@ -1,16 +1,21 @@
 import { Router } from "express";
 import { setSetting, getAllSettings } from "../database.js";
 
+function modelKey(url: string) {
+    return `modelForUrl:${url}`;
+}
+
 export const settingsRouter = Router();
 
 // --- Connection settings ---
 
 settingsRouter.get("/api/settings", (_req, res) => {
     const settings = getAllSettings();
+    const baseUrl = settings.baseUrl ?? "";
     res.json({
-        baseUrl: settings.baseUrl ?? "",
+        baseUrl,
         apiKey: settings.apiKey ?? "",
-        selectedModel: settings.selectedModel ?? "",
+        selectedModel: settings[modelKey(baseUrl)] ?? "",
     });
 });
 
@@ -22,7 +27,9 @@ settingsRouter.post("/api/settings", (req, res) => {
     };
     if (baseUrl !== undefined) setSetting("baseUrl", baseUrl);
     if (apiKey !== undefined) setSetting("apiKey", apiKey);
-    if (selectedModel !== undefined) setSetting("selectedModel", selectedModel);
+    if (selectedModel !== undefined && baseUrl) {
+        setSetting(modelKey(baseUrl), selectedModel);
+    }
     res.json({ ok: true });
 });
 
