@@ -115,7 +115,7 @@ vi.mock("../fileAccess.js", () => ({
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-const { router } = await import("../routes.js");
+const { router } = await import("../routes/index.js");
 
 function createApp() {
     const app = express();

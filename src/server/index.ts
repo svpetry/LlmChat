@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Server } from "node:http";
-import { router } from "./routes.js";
+import { router } from "./routes/index.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const defaultStaticDir = join(__dirname, "..", "..", "dist");
