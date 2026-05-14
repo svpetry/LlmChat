@@ -435,4 +435,4 @@ const RELATED_TERMS = [
     ["city", "town", "location", "home", "live", "moved"],
     ["job", "work", "role", "career", "profession"],
     ["name", "called", "nickname"],
-] as const;
+];
