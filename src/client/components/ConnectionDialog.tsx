@@ -74,7 +74,11 @@ export default function ConnectionDialog() {
 
     const handleStartChat = () => {
         if (!connection.selectedModel) return;
-        saveMutation.mutate({ baseUrl, apiKey, selectedModel: connection.selectedModel });
+        saveMutation.mutate({
+            baseUrl,
+            apiKey,
+            selectedModel: connection.selectedModel,
+        });
         setConnection((prev) => ({ ...prev, connected: true }));
     };
 

@@ -14,8 +14,7 @@ if (!electronApi) {
     throw new Error("Electron runtime API was not provided by bootstrap.");
 }
 
-const { app, BrowserWindow, Menu, dialog, shell } =
-    electronApi;
+const { app, BrowserWindow, Menu, dialog, shell } = electronApi;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | undefined;
@@ -52,7 +51,14 @@ function getSqlJsWasmPath() {
         return join(process.resourcesPath, "sql-wasm.wasm");
     }
 
-    return join(__dirname, "..", "node_modules", "sql.js", "dist", "sql-wasm.wasm");
+    return join(
+        __dirname,
+        "..",
+        "node_modules",
+        "sql.js",
+        "dist",
+        "sql-wasm.wasm",
+    );
 }
 
 async function ensureServer() {
