@@ -4,25 +4,18 @@ import {
     AppBar,
     Box,
     Button,
-    Collapse,
     Container,
     IconButton,
     LinearProgress,
-    Paper,
     TextField,
     Toolbar,
     Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import LogoutIcon from "@mui/icons-material/Logout";
 import SendIcon from "@mui/icons-material/Send";
 import SettingsIcon from "@mui/icons-material/Settings";
 import StopIcon from "@mui/icons-material/Stop";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
 import {
     connectionAtom,
     defaultConnection,
@@ -30,10 +23,10 @@ import {
     type FileAccessSettings,
     memorySettingsAtom,
     type MemorySettings,
-    type MessageStats,
     type SearchSettings,
     type ToolCall,
     type ToolResult,
+    type MessageStats,
     messagesAtom,
     searchSettingsAtom,
     streamingAtom,
@@ -54,102 +47,8 @@ import {
 } from "../api.js";
 import ChatSettingsDialog from "./ChatSettingsDialog.js";
 import ChatSidebar from "./ChatSidebar.js";
-
-function canUseTools(
-    searchSettings: SearchSettings,
-    fileAccessSettings: FileAccessSettings,
-    memorySettings: MemorySettings,
-) {
-    return (
-        searchSettings.enabled ||
-        fileAccessSettings.enabled ||
-        memorySettings.enabled
-    );
-}
-
-function getToolDisplay(toolCall: ToolCall) {
-    let args: Record<string, unknown> = {};
-    try {
-        args = JSON.parse(toolCall.arguments) as Record<string, unknown>;
-    } catch {
-        // ignore invalid tool arguments in historical messages
-    }
-
-    if (toolCall.name === "web_search") {
-        return {
-            label: "Search",
-            detail: typeof args.query === "string" ? args.query : "",
-        };
-    }
-
-    if (toolCall.name === "read_website") {
-        return {
-            label: "Read website",
-            detail: typeof args.url === "string" ? args.url : "",
-        };
-    }
-
-    if (toolCall.name === "save_memory") {
-        return {
-            label: "Save memory",
-            detail: typeof args.content === "string" ? args.content : "",
-        };
-    }
-
-    if (toolCall.name === "search_memory") {
-        return {
-            label: "Search memory",
-            detail: typeof args.query === "string" ? args.query : "",
-        };
-    }
-
-    if (toolCall.name === "list_memories") {
-        return { label: "List memories", detail: "" };
-    }
-
-    if (toolCall.name === "update_memory") {
-        return {
-            label: "Update memory",
-            detail: typeof args.content === "string" ? args.content : "",
-        };
-    }
-
-    if (toolCall.name === "delete_memory") {
-        return {
-            label: "Delete memory",
-            detail: typeof args.id === "string" ? args.id : "",
-        };
-    }
-
-    if (toolCall.name === "clear_memories") {
-        return { label: "Clear memories", detail: "" };
-    }
-
-    const fileToolLabels: Record<string, string> = {
-        list_home_directory: "List files",
-        get_home_path_info: "Inspect path",
-        search_home_paths: "Search files",
-        read_home_file: "Read file",
-        read_home_image: "Display image",
-        search_home_file_text: "Search file text",
-        edit_home_file_lines: "Edit file",
-        create_home_path: "Create path",
-        download_home_file: "Download file",
-        delete_home_path: "Delete path",
-    };
-
-    if (toolCall.name in fileToolLabels) {
-        const detail =
-            typeof args.path === "string"
-                ? args.path
-                : typeof args.query === "string"
-                  ? args.query
-                  : "";
-        return { label: fileToolLabels[toolCall.name], detail };
-    }
-
-    return { label: toolCall.name, detail: toolCall.arguments };
-}
+import MessageBox from "./MessageBox.js";
+import { canUseTools, estimateTokens } from "./chatUtils.js";
 
 export default function ChatScreen() {
     const [connection, setConnection] = useAtom(connectionAtom);
@@ -611,474 +510,35 @@ export default function ChatScreen() {
                 <Box sx={{ flexGrow: 1, overflow: "auto", py: 2 }}>
                     <Container maxWidth="md">
                         {messages.map((msg, i) => (
-                            <Box
+                            <MessageBox
                                 key={i}
-                                sx={{
-                                    display: "flex",
-                                    justifyContent:
-                                        msg.role === "user"
-                                            ? "flex-end"
-                                            : "flex-start",
-                                    mb: 2,
-                                }}
-                            >
-                                <Paper
-                                    sx={{
-                                        px: 2,
-                                        pt: 0.5,
-                                        pb: 1,
-                                        width: "80%",
-                                        bgcolor:
-                                            msg.role === "user"
-                                                ? "primary.main"
-                                                : "grey.800",
-                                        wordBreak: "break-word",
-                                    }}
-                                >
-                                    {msg.role === "assistant" ? (
-                                        <>
-                                            {msg.toolResults &&
-                                                msg.toolResults.length > 0 && (
-                                                    <Box sx={{ mb: 1 }}>
-                                                        <Box
-                                                            onClick={() =>
-                                                                setExpandedTools(
-                                                                    (prev) => {
-                                                                        const next =
-                                                                            new Set(
-                                                                                prev,
-                                                                            );
-                                                                        if (
-                                                                            next.has(
-                                                                                i,
-                                                                            )
-                                                                        ) {
-                                                                            next.delete(
-                                                                                i,
-                                                                            );
-                                                                        } else {
-                                                                            next.add(
-                                                                                i,
-                                                                            );
-                                                                        }
-                                                                        return next;
-                                                                    },
-                                                                )
-                                                            }
-                                                            sx={{
-                                                                display: "flex",
-                                                                alignItems:
-                                                                    "center",
-                                                                gap: 0.5,
-                                                                cursor: "pointer",
-                                                                userSelect:
-                                                                    "none",
-                                                                color: "grey.400",
-                                                                fontSize:
-                                                                    "0.8em",
-                                                                "&:hover": {
-                                                                    color: "grey.300",
-                                                                },
-                                                            }}
-                                                        >
-                                                            <ExpandMoreIcon
-                                                                sx={{
-                                                                    fontSize:
-                                                                        "1em",
-                                                                    transition:
-                                                                        "transform 0.2s",
-                                                                    transform:
-                                                                        expandedTools.has(
-                                                                            i,
-                                                                        )
-                                                                            ? "rotate(180deg)"
-                                                                            : "rotate(0deg)",
-                                                                }}
-                                                            />
-                                                            {
-                                                                msg.toolResults
-                                                                    .length
-                                                            }{" "}
-                                                            tool use
-                                                            {msg.toolResults
-                                                                .length > 1
-                                                                ? "s"
-                                                                : ""}
-                                                        </Box>
-                                                        <Collapse
-                                                            in={expandedTools.has(
-                                                                i,
-                                                            )}
-                                                        >
-                                                            <Box
-                                                                sx={{
-                                                                    mt: 0.5,
-                                                                    p: 1,
-                                                                    borderRadius: 1,
-                                                                    bgcolor:
-                                                                        "grey.900",
-                                                                    borderLeft: 2,
-                                                                    borderColor:
-                                                                        "grey.700",
-                                                                    fontSize:
-                                                                        "0.85em",
-                                                                    color: "grey.400",
-                                                                    maxHeight: 200,
-                                                                    overflow:
-                                                                        "auto",
-                                                                }}
-                                                            >
-                                                                {msg.toolCalls?.map(
-                                                                    (tc, j) => {
-                                                                        const toolDisplay =
-                                                                            getToolDisplay(
-                                                                                tc,
-                                                                            );
-                                                                        return (
-                                                                            <Box
-                                                                                key={
-                                                                                    tc.id
-                                                                                }
-                                                                                sx={
-                                                                                    j >
-                                                                                    0
-                                                                                        ? {
-                                                                                              mt: 1,
-                                                                                              pt: 1,
-                                                                                              borderTop: 1,
-                                                                                              borderColor:
-                                                                                                  "grey.800",
-                                                                                          }
-                                                                                        : {}
-                                                                                }
-                                                                            >
-                                                                                <Typography
-                                                                                    variant="caption"
-                                                                                    sx={{
-                                                                                        color: "grey.500",
-                                                                                    }}
-                                                                                >
-                                                                                    {
-                                                                                        toolDisplay.label
-                                                                                    }
-                                                                                    {toolDisplay.detail
-                                                                                        ? `: ${toolDisplay.detail}`
-                                                                                        : ""}
-                                                                                </Typography>
-                                                                                <Typography
-                                                                                    variant="body2"
-                                                                                    sx={{
-                                                                                        whiteSpace:
-                                                                                            "pre-wrap",
-                                                                                    }}
-                                                                                >
-                                                                                    {
-                                                                                        msg
-                                                                                            .toolResults?.[
-                                                                                            j
-                                                                                        ]
-                                                                                            ?.content
-                                                                                    }
-                                                                                </Typography>
-                                                                            </Box>
-                                                                        );
-                                                                    },
-                                                                )}
-                                                            </Box>
-                                                        </Collapse>
-                                                    </Box>
-                                                )}
-                                            {msg.thinking && (
-                                                <Box
-                                                    sx={{
-                                                        mb: 1,
-                                                        width: "100%",
-                                                    }}
-                                                >
-                                                    <Box
-                                                        onClick={() =>
-                                                            setExpandedThinking(
-                                                                (prev) => {
-                                                                    const next =
-                                                                        new Set(
-                                                                            prev,
-                                                                        );
-                                                                    if (
-                                                                        next.has(
-                                                                            i,
-                                                                        )
-                                                                    ) {
-                                                                        next.delete(
-                                                                            i,
-                                                                        );
-                                                                    } else {
-                                                                        next.add(
-                                                                            i,
-                                                                        );
-                                                                    }
-                                                                    return next;
-                                                                },
-                                                            )
-                                                        }
-                                                        sx={{
-                                                            display: "flex",
-                                                            alignItems:
-                                                                "center",
-                                                            gap: 0.5,
-                                                            cursor: "pointer",
-                                                            userSelect: "none",
-                                                            color: "grey.400",
-                                                            fontSize: "0.8em",
-                                                            "&:hover": {
-                                                                color: "grey.300",
-                                                            },
-                                                        }}
-                                                    >
-                                                        <ExpandMoreIcon
-                                                            sx={{
-                                                                fontSize: "1em",
-                                                                transition:
-                                                                    "transform 0.2s",
-                                                                transform:
-                                                                    expandedThinking.has(
-                                                                        i,
-                                                                    )
-                                                                        ? "rotate(180deg)"
-                                                                        : "rotate(0deg)",
-                                                            }}
-                                                        />
-                                                        Thinking...
-                                                    </Box>
-                                                    <Collapse
-                                                        in={expandedThinking.has(
-                                                            i,
-                                                        )}
-                                                        sx={{
-                                                            width: "100%",
-                                                            minWidth: 0,
-                                                            "& .MuiCollapse-wrapper":
-                                                                {
-                                                                    display:
-                                                                        "block",
-                                                                    width: "100%",
-                                                                    minWidth: 0,
-                                                                },
-                                                            "& .MuiCollapse-wrapperInner":
-                                                                {
-                                                                    width: "100%",
-                                                                    minWidth: 0,
-                                                                },
-                                                        }}
-                                                    >
-                                                        <Box
-                                                            sx={{
-                                                                boxSizing:
-                                                                    "border-box",
-                                                                width: "100%",
-                                                                minWidth: 0,
-                                                                mt: 0.5,
-                                                                p: 1,
-                                                                borderRadius: 1,
-                                                                bgcolor:
-                                                                    "grey.900",
-                                                                borderLeft: 2,
-                                                                borderColor:
-                                                                    "grey.700",
-                                                                fontSize:
-                                                                    "0.85em",
-                                                                color: "grey.400",
-                                                                maxHeight: 300,
-                                                                overflow:
-                                                                    "auto",
-                                                                "& p": {
-                                                                    mt: 0,
-                                                                    mb: 0.5,
-                                                                },
-                                                                "& ul, & ol": {
-                                                                    mt: 0,
-                                                                    mb: 0.5,
-                                                                    pl: 2,
-                                                                },
-                                                                "& pre": {
-                                                                    bgcolor:
-                                                                        "grey.950",
-                                                                    p: 1,
-                                                                    borderRadius: 1,
-                                                                    overflow:
-                                                                        "auto",
-                                                                    fontSize:
-                                                                        "0.9em",
-                                                                },
-                                                                "& code": {
-                                                                    fontFamily:
-                                                                        "monospace",
-                                                                    fontSize:
-                                                                        "0.9em",
-                                                                },
-                                                                "& :not(pre) > code":
-                                                                    {
-                                                                        bgcolor:
-                                                                            "grey.950",
-                                                                        px: 0.5,
-                                                                        borderRadius: 0.5,
-                                                                    },
-                                                            }}
-                                                        >
-                                                            <ReactMarkdown
-                                                                remarkPlugins={[
-                                                                    remarkGfm,
-                                                                    remarkMath,
-                                                                ]}
-                                                                rehypePlugins={[
-                                                                    rehypeKatex,
-                                                                ]}
-                                                            >
-                                                                {msg.thinking}
-                                                            </ReactMarkdown>
-                                                        </Box>
-                                                    </Collapse>
-                                                </Box>
-                                            )}
-                                            {msg.toolResults?.map((result) => {
-                                                const image = result.image;
-                                                if (!image) return null;
-                                                return (
-                                                    <Box
-                                                        key={`${result.toolCallId}-image`}
-                                                        sx={{ mb: 1 }}
-                                                    >
-                                                        <Box
-                                                            component="img"
-                                                            src={image.dataUrl}
-                                                            alt={image.name}
-                                                            sx={{
-                                                                display:
-                                                                    "block",
-                                                                maxWidth:
-                                                                    "100%",
-                                                                maxHeight: 520,
-                                                                borderRadius: 1,
-                                                                objectFit:
-                                                                    "contain",
-                                                                bgcolor:
-                                                                    "grey.950",
-                                                            }}
-                                                        />
-                                                        <Typography
-                                                            variant="caption"
-                                                            sx={{
-                                                                color: "grey.500",
-                                                                display:
-                                                                    "block",
-                                                                mt: 0.5,
-                                                            }}
-                                                        >
-                                                            {image.path}
-                                                        </Typography>
-                                                    </Box>
-                                                );
-                                            })}
-                                            <Box
-                                                className="markdown-body"
-                                                sx={{
-                                                    "& p": { mt: 0, mb: 1 },
-                                                    "& ul, & ol": {
-                                                        mt: 0,
-                                                        mb: 1,
-                                                        pl: 2,
-                                                    },
-                                                    "& li": { mb: 0.25 },
-                                                    "& h1, & h2, & h3, & h4, & h5, & h6":
-                                                        {
-                                                            mt: 1,
-                                                            mb: 0.5,
-                                                        },
-                                                    "& pre": {
-                                                        bgcolor: "grey.900",
-                                                        p: 1.5,
-                                                        borderRadius: 1,
-                                                        overflow: "auto",
-                                                        fontSize: "0.85em",
-                                                    },
-                                                    "& code": {
-                                                        fontFamily: "monospace",
-                                                        fontSize: "0.9em",
-                                                    },
-                                                    "& :not(pre) > code": {
-                                                        bgcolor: "grey.900",
-                                                        px: 0.5,
-                                                        borderRadius: 0.5,
-                                                    },
-                                                    "& blockquote": {
-                                                        borderLeft: 3,
-                                                        borderColor: "grey.600",
-                                                        pl: 2,
-                                                        ml: 0,
-                                                    },
-                                                    "& table": {
-                                                        borderCollapse:
-                                                            "collapse",
-                                                        width: "100%",
-                                                    },
-                                                    "& th, & td": {
-                                                        border: 1,
-                                                        borderColor: "grey.700",
-                                                        px: 1,
-                                                        py: 0.5,
-                                                    },
-                                                    "& hr": {
-                                                        borderColor: "grey.700",
-                                                    },
-                                                }}
-                                            >
-                                                <ReactMarkdown
-                                                    remarkPlugins={[
-                                                        remarkGfm,
-                                                        remarkMath,
-                                                    ]}
-                                                    rehypePlugins={[
-                                                        rehypeKatex,
-                                                    ]}
-                                                >
-                                                    {msg.content || "..."}
-                                                </ReactMarkdown>
-                                            </Box>
-                                        </>
-                                    ) : (
-                                        <Typography
-                                            variant="body1"
-                                            sx={{ whiteSpace: "pre-wrap" }}
-                                        >
-                                            {msg.content}
-                                        </Typography>
-                                    )}
-                                    {msg.stats && (
-                                        <Typography
-                                            variant="caption"
-                                            sx={{
-                                                color: "grey.500",
-                                                mt: 0.5,
-                                                display: "block",
-                                            }}
-                                        >
-                                            PP:{" "}
-                                            {msg.stats.ppTime >= 1000
-                                                ? `${(msg.stats.ppTime / 1000).toFixed(1)}s`
-                                                : `${msg.stats.ppTime}ms`}
-                                            {" · "}
-                                            {msg.stats.tokensPerSec} tok/s
-                                            {" · "}
-                                            {msg.stats.tokenCount} tokens
-                                        </Typography>
-                                    )}
-                                </Paper>
-                            </Box>
+                                msg={msg}
+                                index={i}
+                                expandedThinking={expandedThinking}
+                                expandedTools={expandedTools}
+                                onToggleThinking={(idx) =>
+                                    setExpandedThinking((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(idx)) next.delete(idx);
+                                        else next.add(idx);
+                                        return next;
+                                    })
+                                }
+                                onToggleTools={(idx) =>
+                                    setExpandedTools((prev) => {
+                                        const next = new Set(prev);
+                                        if (next.has(idx)) next.delete(idx);
+                                        else next.add(idx);
+                                        return next;
+                                    })
+                                }
+                            />
                         ))}
                         <div ref={messagesEndRef} />
                     </Container>
                 </Box>
 
-                <Container maxWidth="md" sx={{ py: 2 }}>
+                <Container maxWidth="md" sx={{ pt: 2, pb: 0.5 }}>
                     <Box sx={{ display: "flex", gap: 1 }}>
                         <TextField
                             fullWidth
@@ -1112,6 +572,17 @@ export default function ChatScreen() {
                         )}
                     </Box>
                 </Container>
+                <Typography
+                    variant="caption"
+                    sx={{
+                        px: 2,
+                        py: 0.25,
+                        color: "grey.500",
+                        textAlign: "center",
+                    }}
+                >
+                    ~{estimateTokens(messages).toLocaleString()} tokens in context
+                </Typography>
             </Box>
         </Box>
     );
