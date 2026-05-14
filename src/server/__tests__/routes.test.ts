@@ -112,6 +112,29 @@ vi.mock("../fileAccess.js", () => ({
     ],
 }));
 
+const mockExecuteCommandTool = vi.fn();
+
+vi.mock("../execute.js", () => ({
+    executeCommandTool: mockExecuteCommandTool,
+    executeTools: [
+        {
+            type: "function",
+            function: {
+                name: "execute_command",
+                description: "Execute a command",
+                parameters: {
+                    type: "object",
+                    properties: {
+                        command: { type: "string" },
+                        timeout: { type: "number" },
+                    },
+                    required: ["command"],
+                },
+            },
+        },
+    ],
+}));
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -274,6 +297,38 @@ describe("memory settings", () => {
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ ok: true });
         expect(mockSetSetting).toHaveBeenCalledWith("memoryEnabled", "true");
+    });
+});
+
+describe("execute settings", () => {
+    it("defaults command execution to disabled", async () => {
+        mockGetAllSettings.mockReturnValue({});
+
+        const res = await request(createApp()).get("/api/execute-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: false });
+    });
+
+    it("returns stored execute setting", async () => {
+        mockGetAllSettings.mockReturnValue({
+            executeEnabled: "true",
+        });
+
+        const res = await request(createApp()).get("/api/execute-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: true });
+    });
+
+    it("saves execute setting", async () => {
+        const res = await request(createApp())
+            .post("/api/execute-settings")
+            .send({ enabled: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ ok: true });
+        expect(mockSetSetting).toHaveBeenCalledWith("executeEnabled", "true");
     });
 });
 
@@ -1489,6 +1544,221 @@ describe("POST /api/chat", () => {
             (message) => message.role === "tool",
         );
         expect(toolMessages).toHaveLength(4);
+    });
+
+    it("advertises execute_command tool when execute is enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "executeEnabled") return "true";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue(
+            createStreamResponse([
+                sseData({
+                    choices: [{ delta: { content: "Ready." } }],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "run something" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools: { function: { name: string } }[];
+        };
+        expect(body.tools.map((tool) => tool.function.name)).toEqual([
+            "execute_command",
+        ]);
+    });
+
+    it("does not advertise execute_command tool when disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            body: {
+                getReader: () => ({
+                    read: vi.fn(async () => ({ done: true })),
+                }),
+            },
+        });
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "run something" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools?: unknown[];
+        };
+        expect(body.tools).toBeUndefined();
+    });
+
+    it("executes execute_command tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "executeEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteCommandTool.mockResolvedValue({
+            summary: "Command exited with code 0",
+            content: JSON.stringify({
+                command: "python --version",
+                exitCode: 0,
+                timedOut: false,
+                stdout: "Python 3.12.0",
+                stderr: "",
+            }),
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_exec",
+                                            type: "function",
+                                            function: {
+                                                name: "execute_command",
+                                                arguments:
+                                                    '{"command":"python --version"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "Python 3.12.0 is installed." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [
+                    { role: "user", content: "What Python version do I have?" },
+                ],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Command exited with code 0");
+        expect(res.text).toContain("Python 3.12.0 is installed.");
+        expect(mockExecuteCommandTool).toHaveBeenCalledWith(
+            "execute_command",
+            '{"command":"python --version"}',
+        );
+
+        const secondBody = JSON.parse(
+            mockFetch.mock.calls[1][1].body as string,
+        ) as { messages: { role: string; content: string }[] };
+        expect(secondBody.messages).toContainEqual(
+            expect.objectContaining({
+                role: "tool",
+                content: expect.stringContaining("Python 3.12.0"),
+            }),
+        );
+    });
+
+    it("refuses execute_command tool calls when disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            return undefined;
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_exec",
+                                            type: "function",
+                                            function: {
+                                                name: "execute_command",
+                                                arguments:
+                                                    '{"command":"rm -rf /"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "Cannot execute." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "run a command" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain(
+            "Error: Command execution is disabled",
+        );
+        expect(res.text).toContain("Cannot execute.");
+        expect(mockExecuteCommandTool).not.toHaveBeenCalled();
     });
 
     it("forwards upstream API error", async () => {
