@@ -10,6 +10,7 @@ import {
     createMessage,
     getMessagesByChat,
 } from "../database.js";
+import { logger } from "../logger.js";
 
 export const chatsRouter = Router();
 
@@ -141,9 +142,18 @@ chatsRouter.post("/api/chats/:chatId/generate-title", async (req, res) => {
         res.status(404).json({ error: "Chat not found" });
         return;
     }
-    const messages = getMessagesByChat(req.params.chatId);
-    const firstUser = messages.find((m) => m.role === "user");
-    if (!firstUser) {
+    const body = (req.body ?? {}) as { firstUserContent?: unknown };
+    const firstUserContentFromBody =
+        typeof body.firstUserContent === "string"
+            ? body.firstUserContent.trim()
+            : "";
+    const messages = firstUserContentFromBody
+        ? []
+        : getMessagesByChat(req.params.chatId);
+    const firstUserContent =
+        firstUserContentFromBody ||
+        messages.find((m) => m.role === "user")?.content;
+    if (!firstUserContent) {
         res.status(400).json({ error: "No user message found" });
         return;
     }
@@ -158,6 +168,12 @@ chatsRouter.post("/api/chats/:chatId/generate-title", async (req, res) => {
     }
 
     try {
+        logger.debug("OpenAI API request (title)", {
+            url: `${baseUrl}/chat/completions`,
+            model,
+            chatId: req.params.chatId,
+        });
+
         const response = await fetch(`${baseUrl}/chat/completions`, {
             method: "POST",
             headers: {
@@ -170,26 +186,41 @@ chatsRouter.post("/api/chats/:chatId/generate-title", async (req, res) => {
                     {
                         role: "system",
                         content:
-                            "Generate a very short title (3-6 words) for a chat that starts with the following user message. Reply with only the title text, no quotes, no punctuation.",
+                            "Generate a very short title (3-6 words) for a chat that starts with the following user message. Do not think step by step. Reply with only the title text, no quotes, no punctuation.",
                     },
                     {
                         role: "user",
-                        content: firstUser.content.slice(0, 500),
+                        content: `${firstUserContent.slice(0, 500)}\n\n/no_think`,
                     },
                 ],
                 stream: false,
-                max_tokens: 30,
+                max_tokens: 512,
+                temperature: 0.2,
+                chat_template_kwargs: {
+                    enable_thinking: false,
+                },
             }),
         });
 
         if (!response.ok) {
             const text = await response.text();
+            logger.debug("OpenAI API error response (title)", {
+                status: response.status,
+                body: text,
+                chatId: req.params.chatId,
+            });
             res.status(502).json({ error: `Title generation failed: ${text}` });
             return;
         }
 
         const data = (await response.json()) as {
-            choices: { message: { content: string } }[];
+            choices: {
+                message?: {
+                    content?: string | null;
+                    reasoning_content?: string | null;
+                    thinking?: string | null;
+                };
+            }[];
         };
         const title = data.choices?.[0]?.message?.content
             ?.trim()
@@ -197,13 +228,26 @@ chatsRouter.post("/api/chats/:chatId/generate-title", async (req, res) => {
             .replace(/\.$/, "");
 
         if (!title) {
+            logger.debug("OpenAI API empty title response", {
+                chatId: req.params.chatId,
+                choice: data.choices?.[0],
+            });
             res.status(500).json({ error: "Empty title generated" });
             return;
         }
 
         updateChatTitle(req.params.chatId, title);
+        logger.debug("OpenAI API response (title)", {
+            model,
+            chatId: req.params.chatId,
+            title,
+        });
         res.json({ title });
     } catch (err) {
+        logger.debug("OpenAI API request failed (title)", {
+            error: (err as Error).message,
+            chatId: req.params.chatId,
+        });
         res.status(500).json({
             error: `Title generation failed: ${(err as Error).message}`,
         });

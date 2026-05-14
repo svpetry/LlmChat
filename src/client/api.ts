@@ -251,15 +251,25 @@ export async function saveMessage(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(message),
     });
+    if (!res.ok) {
+        const err = await res.json().catch(() => undefined);
+        throw new Error(err?.error ?? "Failed to save message");
+    }
     return res.json();
 }
 
 export async function generateChatTitle(
     chatId: string,
+    firstUserContent?: string,
 ): Promise<{ title: string }> {
     const res = await fetch(`${API}/chats/${chatId}/generate-title`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ firstUserContent }),
     });
-    if (!res.ok) throw new Error("Failed to generate title");
+    if (!res.ok) {
+        const err = await res.json().catch(() => undefined);
+        throw new Error(err?.error ?? "Failed to generate title");
+    }
     return res.json();
 }

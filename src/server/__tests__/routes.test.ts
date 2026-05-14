@@ -2158,6 +2158,43 @@ describe("POST /api/chats/:chatId/generate-title", () => {
         expect(res.body.error).toBe("No user message found");
     });
 
+    it("uses provided first user content when messages are not saved yet", async () => {
+        mockGetChat.mockReturnValue({ id: "c1", model: "gpt-4" });
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            json: async () => ({
+                choices: [{ message: { content: "Commodore BASIC Loop" } }],
+            }),
+        });
+
+        const res = await request(createApp())
+            .post("/api/chats/c1/generate-title")
+            .send({ firstUserContent: "Write a C64 BASIC loop" });
+
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            max_tokens: number;
+            chat_template_kwargs?: { enable_thinking?: boolean };
+            messages: { role: string; content: string }[];
+        };
+        expect(res.status).toBe(200);
+        expect(body.max_tokens).toBe(512);
+        expect(body.chat_template_kwargs?.enable_thinking).toBe(false);
+        expect(body.messages[1].content).toContain(
+            "Write a C64 BASIC loop",
+        );
+        expect(body.messages[1].content).toContain("/no_think");
+        expect(mockGetMessagesByChat).not.toHaveBeenCalled();
+        expect(mockUpdateChatTitle).toHaveBeenCalledWith(
+            "c1",
+            "Commodore BASIC Loop",
+        );
+    });
+
     it("returns 400 when LLM is not configured", async () => {
         mockGetChat.mockReturnValue({ id: "c1", model: "" });
         mockGetMessagesByChat.mockReturnValue([

@@ -11,6 +11,7 @@ import {
 import { executeCommandTool, executeTools } from "../execute.js";
 import { executeHomeFileTool, homeFileTools } from "../fileAccess.js";
 import { executeMemoryTool, memoryTools } from "../memory.js";
+import { logger } from "../logger.js";
 
 export const chatCompletionRouter = Router();
 
@@ -424,6 +425,15 @@ async function streamWithTools(
         body.tools = tools;
     }
 
+    logger.debug("OpenAI API request", {
+        url: `${baseUrl}/chat/completions`,
+        model,
+        messageCount: openaiMessages.length,
+        toolCount: tools.length,
+        iteration,
+    });
+    logger.silly("OpenAI API request body", { body });
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -452,6 +462,8 @@ async function streamWithTools(
     let finishReason: string | null = null;
     let forwardedChunks = false;
     let toolCallsDetected = false;
+    let responseContent = "";
+    let responseThinking = "";
 
     try {
         while (true) {
@@ -515,6 +527,12 @@ async function streamWithTools(
                                 delta.reasoning_content ||
                                 delta.thinking
                             ) {
+                                if (delta.content)
+                                    responseContent += delta.content;
+                                if (delta.reasoning_content)
+                                    responseThinking += delta.reasoning_content;
+                                if (delta.thinking)
+                                    responseThinking += delta.thinking;
                                 res.write(
                                     `data: ${JSON.stringify(parsed)}\n\n`,
                                 );
@@ -529,6 +547,23 @@ async function streamWithTools(
         }
     } finally {
         // Don't end the response yet if we need to loop
+    }
+
+    logger.debug("OpenAI API response", {
+        model,
+        finishReason,
+        toolCallCount: toolCalls.size,
+        iteration,
+    });
+    if (responseContent) {
+        logger.debug("OpenAI API response content", {
+            content: responseContent,
+        });
+    }
+    if (responseThinking) {
+        logger.silly("OpenAI API response thinking", {
+            thinking: responseThinking,
+        });
     }
 
     const bufferedContent = contentSanitizer.flush();
@@ -547,6 +582,11 @@ async function streamWithTools(
         iteration < MAX_TOOL_ITERATIONS
     ) {
         const toolCallsArray = Array.from(toolCalls.values());
+
+        logger.debug("OpenAI API tool calls", {
+            tools: toolCallsArray.map((tc) => tc.function.name),
+            iteration,
+        });
 
         // Tell client to discard any content forwarded before tool_calls were detected
         if (forwardedChunks) {
@@ -694,27 +734,47 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
             );
         } else {
             // Original passthrough streaming
+            const passthroughBody = {
+                model,
+                messages: openaiMessages,
+                stream: true,
+            };
+
+            logger.debug("OpenAI API request (passthrough)", {
+                url: `${baseUrl}/chat/completions`,
+                model,
+                messageCount: openaiMessages.length,
+            });
+            logger.silly("OpenAI API request body (passthrough)", {
+                body: passthroughBody,
+            });
+
             const response = await fetch(`${baseUrl}/chat/completions`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                     Authorization: `Bearer ${apiKey}`,
                 },
-                body: JSON.stringify({
-                    model,
-                    messages: openaiMessages,
-                    stream: true,
-                }),
+                body: JSON.stringify(passthroughBody),
                 signal: (req as unknown as { signal?: AbortSignal }).signal,
             });
 
             if (!response.ok) {
                 const text = await response.text();
+                logger.debug("OpenAI API error response", {
+                    status: response.status,
+                    body: text,
+                });
                 res.status(response.status).json({
                     error: `API error: ${text}`,
                 });
                 return;
             }
+
+            logger.debug("OpenAI API response (passthrough)", {
+                status: response.status,
+                model,
+            });
 
             res.setHeader("Content-Type", "text/event-stream");
             res.setHeader("Cache-Control", "no-cache");

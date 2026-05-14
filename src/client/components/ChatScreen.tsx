@@ -201,14 +201,21 @@ export default function ChatScreen() {
         const userMsgId = crypto.randomUUID();
         const userMessage = { role: "user" as const, content: text };
         const updatedMessages = [...messages, userMessage];
+        const currentChat = chatList.find((c) => c.id === activeChatId);
+        const shouldGenerateTitle =
+            currentChat?.title === "New Chat" &&
+            !messages.some((m) => m.role === "user");
         setMessages(updatedMessages);
         setInput("");
         setStreaming(true);
 
         // Persist user message
-        saveMessage(activeChatId, { id: userMsgId, ...userMessage }).catch(
-            () => {},
-        );
+        const userSave = saveMessage(activeChatId, {
+            id: userMsgId,
+            ...userMessage,
+        }).catch((err) => {
+            console.warn("Failed to save user message", err);
+        });
 
         let assistantContent = "";
         let thinkingContent = "";
@@ -405,21 +412,27 @@ export default function ChatScreen() {
                 saveMessage(activeChatId, assistantMsg).catch(() => {});
 
                 // Auto-generate title after first exchange
-                const currentChat = chatList.find((c) => c.id === activeChatId);
-                if (
-                    currentChat?.title === "New Chat" &&
-                    updatedMessages.length === 1
-                ) {
+                if (shouldGenerateTitle) {
                     const chatId = activeChatId;
-                    generateChatTitle(chatId)
-                        .then(({ title }) => {
+                    void (async () => {
+                        try {
+                            await userSave;
+                            const { title } = await generateChatTitle(
+                                chatId,
+                                text,
+                            );
                             setChatList((prev) =>
                                 prev.map((c) =>
                                     c.id === chatId ? { ...c, title } : c,
                                 ),
                             );
-                        })
-                        .catch(() => {});
+                        } catch (err) {
+                            console.warn(
+                                "Failed to generate chat title",
+                                err,
+                            );
+                        }
+                    })();
                 }
             }
         }

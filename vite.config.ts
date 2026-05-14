@@ -7,7 +7,7 @@ const pkg = JSON.parse(
 );
 
 export default defineConfig({
-    plugins: [react()],
+    plugins: [react({ tsconfigPath: "./tsconfig.client.json" })],
     define: {
         __APP_VERSION__: JSON.stringify(pkg.version),
     },
