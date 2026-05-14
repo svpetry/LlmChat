@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
-import path from "node:path";
+
 
 const MAX_OUTPUT_BYTES = 200_000;
 const DEFAULT_TIMEOUT_SECONDS = 30;

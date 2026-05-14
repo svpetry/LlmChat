@@ -72,7 +72,7 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             setSearxngUrl("");
             setLoaded(true);
         });
-    }, [open, setFileAccessSettings, setMemorySettings, setSearchSettings]);
+    }, [open, setExecuteSettings, setFileAccessSettings, setMemorySettings, setSearchSettings]);
 
     const handleSave = async () => {
         setSaving(true);

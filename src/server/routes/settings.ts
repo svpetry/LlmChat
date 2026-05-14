@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getSetting, setSetting, getAllSettings } from "../database.js";
+import { setSetting, getAllSettings } from "../database.js";
 
 export const settingsRouter = Router();
 
