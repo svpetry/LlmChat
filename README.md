@@ -1,6 +1,6 @@
 # LLM Chat
 
-A web-based chat client for OpenAI-compatible LLM APIs. Connect to any server that exposes the `/v1/models` and `/v1/chat/completions` endpoints and chat with streamed responses.
+A web-based and desktop chat client for OpenAI-compatible LLM APIs. Connect to any server that exposes the `/v1/models` and `/v1/chat/completions` endpoints and chat with streamed responses. Supports a rich set of tools including web search, file access, memory, and command execution.
 
 I needed a simple chat client so I could test my local LLM instances. This is the result.
 
@@ -9,18 +9,42 @@ I needed a simple chat client so I could test my local LLM instances. This is th
 - Connect to any OpenAI-compatible API (e.g. llama.cpp, vLLM, LM Studio)
 - Model selection from the server's available models
 - Streaming responses with real-time token display
-- Optional web search tool support via Brave Search or SearXNG
+- Persistent chat history with sidebar navigation
 - Per-message performance stats (prefill time, tokens/sec, token count)
+- Thinking/reasoning content display for compatible models
+- LaTeX math rendering
+- Electron desktop app packaging (Windows installer)
 - Persisted connection and search settings via SQLite
 
-## Web Search
+## Tools
 
-Enable web search from the in-chat settings dialog. When enabled, the server advertises a `web_search` tool to compatible models and handles tool calls by querying either Brave Search or a SearXNG instance. Search credentials and URLs are stored on the server, so the browser never sends them to the upstream LLM API.
+Tools are enabled per-session from the in-chat settings dialog. When enabled, the server advertises them to the model and executes tool calls server-side. Tool calls and results are streamed to the client via SSE, with support for multi-iteration tool loops (up to 5 rounds).
+
+### Web Search
+
+Search the web using Brave Search or SearXNG. Search credentials and URLs are stored on the server only.
+
+### Website Reading
+
+Fetch and display content from public URLs, including image downloads.
+
+### File Access
+
+Read, edit, create, delete, search, and download files in the user's home directory. Display images directly in chat.
+
+### Memory
+
+Store, search, list, update, and delete persistent user memories. The model can recall preferences and context across conversations.
+
+### Command Execution
+
+Execute shell commands in the user's home directory and view the output in chat.
 
 ## Tech Stack
 
-- **Frontend:** React 19, TypeScript, MUI, Jotai, TanStack React Query
-- **Backend:** Express, sql.js (SQLite)
+- **Frontend:** React 19, TypeScript, MUI v7, Jotai, TanStack React Query
+- **Backend:** Express, sql.js (SQLite WASM)
+- **Desktop:** Electron
 - **Build:** Vite, pnpm
 
 ## Getting Started
