@@ -14,12 +14,14 @@ import {
     TextField,
     Typography,
 } from "@mui/material";
-import { fileAccessSettingsAtom, searchSettingsAtom } from "../atoms.js";
+import { executeSettingsAtom, fileAccessSettingsAtom, searchSettingsAtom } from "../atoms.js";
 import { memorySettingsAtom } from "../atoms.js";
 import {
+    fetchExecuteSettings,
     fetchFileAccessSettings,
     fetchMemorySettings,
     fetchSearchSettings,
+    saveExecuteSettings,
     saveFileAccessSettings,
     saveMemorySettings,
     saveSearchSettings,
@@ -34,9 +36,11 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
     const [searchSettings, setSearchSettings] = useAtom(searchSettingsAtom);
     const [, setFileAccessSettings] = useAtom(fileAccessSettingsAtom);
     const [, setMemorySettings] = useAtom(memorySettingsAtom);
+    const [, setExecuteSettings] = useAtom(executeSettingsAtom);
     const [enabled, setEnabled] = useState(false);
     const [fileAccessEnabled, setFileAccessEnabled] = useState(false);
     const [memoryEnabled, setMemoryEnabled] = useState(false);
+    const [executeEnabled, setExecuteEnabled] = useState(false);
     const [provider, setProvider] = useState<"brave" | "searxng">("brave");
     const [apiKey, setApiKey] = useState("");
     const [searxngUrl, setSearxngUrl] = useState("");
@@ -53,13 +57,16 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             fetchSearchSettings(),
             fetchFileAccessSettings(),
             fetchMemorySettings(),
-        ]).then(([s, f, m]) => {
+            fetchExecuteSettings(),
+        ]).then(([s, f, m, x]) => {
             setSearchSettings(s);
             setFileAccessSettings(f);
             setMemorySettings(m);
+            setExecuteSettings(x);
             setEnabled(s.enabled);
             setFileAccessEnabled(f.enabled);
             setMemoryEnabled(m.enabled);
+            setExecuteEnabled(x.enabled);
             setProvider(s.provider);
             setApiKey("");
             setSearxngUrl("");
@@ -84,16 +91,19 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                 saveSearchSettings(data),
                 saveFileAccessSettings({ enabled: fileAccessEnabled }),
                 saveMemorySettings({ enabled: memoryEnabled }),
+                saveExecuteSettings({ enabled: executeEnabled }),
             ]);
-            const [updatedSearch, updatedFileAccess, updatedMemory] =
+            const [updatedSearch, updatedFileAccess, updatedMemory, updatedExecute] =
                 await Promise.all([
                     fetchSearchSettings(),
                     fetchFileAccessSettings(),
                     fetchMemorySettings(),
+                    fetchExecuteSettings(),
                 ]);
             setSearchSettings(updatedSearch);
             setFileAccessSettings(updatedFileAccess);
             setMemorySettings(updatedMemory);
+            setExecuteSettings(updatedExecute);
             onClose();
         } finally {
             setSaving(false);
@@ -225,6 +235,25 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                             Allows model tool calls to read, search, edit,
                             create, download, and delete files under your home
                             directory.
+                        </Typography>
+                    </Box>
+
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={executeEnabled}
+                                    onChange={(e) =>
+                                        setExecuteEnabled(e.target.checked)
+                                    }
+                                />
+                            }
+                            label="Command Execution"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Allows the model to execute shell commands
+                            (PowerShell on Windows, /bin/sh on other platforms)
+                            in your home directory. Use with caution.
                         </Typography>
                     </Box>
                 </Box>

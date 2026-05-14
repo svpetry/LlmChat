@@ -8,6 +8,7 @@ import {
     webSearchTool,
     type SearchResult,
 } from "../search.js";
+import { executeCommandTool, executeTools } from "../execute.js";
 import { executeHomeFileTool, homeFileTools } from "../fileAccess.js";
 import { executeMemoryTool, memoryTools } from "../memory.js";
 
@@ -52,7 +53,8 @@ type ChatTool =
     | typeof webSearchTool
     | typeof readWebsiteTool
     | (typeof homeFileTools)[number]
-    | (typeof memoryTools)[number];
+    | (typeof memoryTools)[number]
+    | (typeof executeTools)[number];
 
 class LeadingChannelMarkupSanitizer {
     private buffer = "";
@@ -386,6 +388,20 @@ async function executeToolCall(toolCall: OpenAIToolCall): Promise<{
         );
     }
 
+    if (
+        executeTools.some(
+            (tool) => tool.function.name === toolCall.function.name,
+        )
+    ) {
+        if (getSetting("executeEnabled") !== "true") {
+            throw new Error("Command execution is disabled");
+        }
+        return executeCommandTool(
+            toolCall.function.name,
+            toolCall.function.arguments,
+        );
+    }
+
     throw new Error(`Unknown tool: ${toolCall.function.name}`);
 }
 
@@ -650,6 +666,9 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
     }
     if (toolsEnabled && memoryEnabled) {
         tools.push(...memoryTools);
+    }
+    if (toolsEnabled && getSetting("executeEnabled") === "true") {
+        tools.push(...executeTools);
     }
     const useTools = tools.length > 0;
 

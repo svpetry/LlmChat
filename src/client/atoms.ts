@@ -56,6 +56,10 @@ export interface MemorySettings {
     enabled: boolean;
 }
 
+export interface ExecuteSettings {
+    enabled: boolean;
+}
+
 export const defaultConnection: ConnectionState = {
     baseUrl: "",
     apiKey: "",
@@ -77,6 +81,9 @@ export const fileAccessSettingsAtom = atom<FileAccessSettings>({
     enabled: false,
 });
 export const memorySettingsAtom = atom<MemorySettings>({
+    enabled: false,
+});
+export const executeSettingsAtom = atom<ExecuteSettings>({
     enabled: false,
 });
 

@@ -1,5 +1,6 @@
 import type {
     ChatSummary,
+    ExecuteSettings,
     FileAccessSettings,
     MemorySettings,
     Message,
@@ -189,6 +190,22 @@ export async function saveMemorySettings(data: {
     enabled?: boolean;
 }): Promise<{ ok: boolean }> {
     const res = await fetch(`${API}/memory-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
+export async function fetchExecuteSettings(): Promise<ExecuteSettings> {
+    const res = await fetch(`${API}/execute-settings`);
+    return res.json();
+}
+
+export async function saveExecuteSettings(data: {
+    enabled?: boolean;
+}): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/execute-settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
