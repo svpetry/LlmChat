@@ -1,4 +1,6 @@
 import type {
+    BrowserSettings,
+    ExecuteSettings,
     FileAccessSettings,
     MemorySettings,
     SearchSettings,
@@ -9,11 +11,15 @@ export function canUseTools(
     searchSettings: SearchSettings,
     fileAccessSettings: FileAccessSettings,
     memorySettings: MemorySettings,
+    executeSettings?: ExecuteSettings,
+    browserSettings?: BrowserSettings,
 ) {
     return (
         searchSettings.enabled ||
         fileAccessSettings.enabled ||
-        memorySettings.enabled
+        memorySettings.enabled ||
+        executeSettings?.enabled ||
+        browserSettings?.enabled
     );
 }
 

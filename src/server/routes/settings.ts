@@ -109,3 +109,20 @@ settingsRouter.post("/api/execute-settings", (req, res) => {
     }
     res.json({ ok: true });
 });
+
+// --- Browser automation settings ---
+
+settingsRouter.get("/api/browser-settings", (_req, res) => {
+    const settings = getAllSettings();
+    res.json({
+        enabled: settings.browserEnabled === "true",
+    });
+});
+
+settingsRouter.post("/api/browser-settings", (req, res) => {
+    const { enabled } = req.body as { enabled?: boolean };
+    if (enabled !== undefined) {
+        setSetting("browserEnabled", String(enabled));
+    }
+    res.json({ ok: true });
+});

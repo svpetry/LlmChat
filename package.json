@@ -26,6 +26,7 @@
         "express": "^4.21.2",
         "jotai": "^2.12.5",
         "katex": "^0.16.45",
+        "playwright": "^1.50.1",
         "react": "^19.1.0",
         "react-dom": "^19.1.0",
         "react-markdown": "^10.1.0",

@@ -60,6 +60,10 @@ export interface ExecuteSettings {
     enabled: boolean;
 }
 
+export interface BrowserSettings {
+    enabled: boolean;
+}
+
 export const defaultConnection: ConnectionState = {
     baseUrl: "",
     apiKey: "",
@@ -84,6 +88,9 @@ export const memorySettingsAtom = atom<MemorySettings>({
     enabled: false,
 });
 export const executeSettingsAtom = atom<ExecuteSettings>({
+    enabled: false,
+});
+export const browserSettingsAtom = atom<BrowserSettings>({
     enabled: false,
 });
 

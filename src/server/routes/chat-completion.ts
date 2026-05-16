@@ -11,11 +11,16 @@ import {
 import { executeCommandTool, executeTools } from "../execute.js";
 import { executeHomeFileTool, homeFileTools } from "../fileAccess.js";
 import { executeMemoryTool, memoryTools } from "../memory.js";
+import {
+    browserAutomationTools,
+    executeBrowserTool,
+} from "../browserAutomation.js";
 import { logger } from "../logger.js";
 
 export const chatCompletionRouter = Router();
 
 const MAX_TOOL_ITERATIONS = 5;
+const MAX_BROWSER_TOOL_ITERATIONS = 12;
 const CURRENT_DATE_TIME_SYSTEM_PROMPT_PREFIX = "Current date and time:";
 const MEMORY_SYSTEM_PROMPT =
     "Memory is enabled. You have durable memory tools backed by the app database. Use save_memory when the user explicitly asks you to remember, save, or keep a fact or preference for later. Use search_memory when remembered facts or preferences may help answer the user's request. Use list_memories when the user asks what you remember. Use update_memory or delete_memory when the user corrects, changes, or asks you to forget a remembered fact; search or list first if you need the memory id. Use clear_memories only when the user clearly asks to clear all memories. Do not claim you remembered, updated, or forgot something unless the relevant memory tool succeeded.";
@@ -23,6 +28,8 @@ const EXECUTE_SYSTEM_PROMPT =
     process.platform === "win32"
         ? "You are running on Windows. The execute_command tool uses PowerShell (powershell.exe). Use PowerShell-compatible commands and syntax."
         : "You are running on Linux. The execute_command tool uses /bin/sh. Use POSIX shell-compatible commands and syntax.";
+const BROWSER_SYSTEM_PROMPT =
+    "Browser automation is enabled. You can navigate websites, take screenshots, click elements, type into forms, scroll, and extract page content. Always use browser_navigate first to open a URL, then browser_screenshot or browser_get_text to inspect the page before interacting. Use browser_click with text/role/selector to interact with elements. The browser maintains state across tool calls within this conversation.";
 const CHANNEL_LABELS = ["analysis", "commentary", "final", "thought"];
 const CONTROL_TOKEN_NAMES = [
     "call",
@@ -43,6 +50,13 @@ const CONTROL_TOKEN_PREFIXES = CONTROL_TOKEN_NAMES.flatMap((name) => [
     `<|${name}>`,
     `<${name}|>`,
 ]);
+const RAW_TOOL_CALL_AT_START = /^<\|?tool_call\|?>/i;
+const RAW_TOOL_CALL_PREFIXES = [
+    "<|tool_call|>",
+    "<|tool_call>",
+    "<tool_call|>",
+    "<tool_call>",
+];
 const CHANNEL_LABEL_AT_START = new RegExp(
     `^(${CHANNEL_LABELS.join("|")})\\b\\s*`,
     "i",
@@ -59,19 +73,32 @@ type ChatTool =
     | typeof readWebsiteTool
     | (typeof homeFileTools)[number]
     | (typeof memoryTools)[number]
-    | (typeof executeTools)[number];
+    | (typeof executeTools)[number]
+    | (typeof browserAutomationTools)[number];
 
 class LeadingChannelMarkupSanitizer {
     private buffer = "";
     private released = false;
+    private rawToolCallSuppressed = false;
 
     sanitize(chunk: string): string {
+        if (this.rawToolCallSuppressed) {
+            return "";
+        }
+
         if (this.released) {
             return chunk;
         }
 
         this.buffer += chunk;
         const stripped = stripLeadingChannelMarkup(this.buffer);
+        if (stripped.rawToolCall) {
+            this.rawToolCallSuppressed = true;
+            this.released = true;
+            this.buffer = "";
+            return "";
+        }
+
         if (stripped.pending && this.buffer.length < 256) {
             return "";
         }
@@ -82,28 +109,56 @@ class LeadingChannelMarkupSanitizer {
     }
 
     flush(): string {
+        if (this.rawToolCallSuppressed) {
+            return "";
+        }
+
         if (this.released || !this.buffer) {
             return "";
         }
 
         const stripped = stripLeadingChannelMarkup(this.buffer);
+        if (stripped.rawToolCall) {
+            this.rawToolCallSuppressed = true;
+            this.released = true;
+            this.buffer = "";
+            return "";
+        }
+
         this.released = true;
         this.buffer = "";
         return stripped.text;
+    }
+
+    suppressedRawToolCall(): boolean {
+        return this.rawToolCallSuppressed;
     }
 }
 
 function stripLeadingChannelMarkup(input: string): {
     text: string;
     pending: boolean;
+    rawToolCall: boolean;
 } {
     let text = input;
     let stripped = false;
     let pending = false;
+    let rawToolCall = false;
 
     while (true) {
         const leadingWhitespace = text.match(/^\s*/)?.[0] ?? "";
         const candidate = text.slice(leadingWhitespace.length);
+
+        if (isPartialRawToolCallToken(candidate)) {
+            pending = true;
+            break;
+        }
+
+        if (RAW_TOOL_CALL_AT_START.test(candidate)) {
+            rawToolCall = true;
+            text = "";
+            break;
+        }
 
         if (isPartialControlToken(candidate)) {
             pending = true;
@@ -145,7 +200,19 @@ function stripLeadingChannelMarkup(input: string): {
     return {
         text: stripped ? text.replace(/^\s+/, "") : input,
         pending,
+        rawToolCall,
     };
+}
+
+function isPartialRawToolCallToken(text: string): boolean {
+    if (!text) {
+        return false;
+    }
+
+    const lower = text.toLowerCase();
+    return RAW_TOOL_CALL_PREFIXES.some(
+        (prefix) => prefix.startsWith(lower) && prefix !== lower,
+    );
 }
 
 function isPartialControlToken(text: string): boolean {
@@ -210,6 +277,7 @@ function addSystemPrompts<T>(
     messages: T[],
     includeMemoryPrompt: boolean,
     includeExecutePrompt: boolean,
+    includeBrowserPrompt: boolean,
 ): T[] {
     const systemMessages = [
         {
@@ -232,12 +300,17 @@ function addSystemPrompts<T>(
         } as T);
     }
 
+    if (includeBrowserPrompt) {
+        systemMessages.push({
+            role: "system",
+            content: BROWSER_SYSTEM_PROMPT,
+        } as T);
+    }
+
     return [...systemMessages, ...messages];
 }
 
-async function executeSearch(
-    toolCall: OpenAIToolCall,
-): Promise<{
+async function executeSearch(toolCall: OpenAIToolCall): Promise<{
     summary: string;
     content: string;
     image?: {
@@ -418,6 +491,20 @@ async function executeToolCall(toolCall: OpenAIToolCall): Promise<{
         );
     }
 
+    if (
+        browserAutomationTools.some(
+            (tool) => tool.function.name === toolCall.function.name,
+        )
+    ) {
+        if (getSetting("browserEnabled") !== "true") {
+            throw new Error("Browser automation is disabled");
+        }
+        return executeBrowserTool(
+            toolCall.function.name,
+            toolCall.function.arguments,
+        );
+    }
+
     throw new Error(`Unknown tool: ${toolCall.function.name}`);
 }
 
@@ -430,6 +517,7 @@ async function streamWithTools(
     res: import("express").Response,
     signal?: AbortSignal,
     iteration = 0,
+    maxToolIterations = MAX_TOOL_ITERATIONS,
 ): Promise<void> {
     const body: Record<string, unknown> = {
         model,
@@ -446,6 +534,7 @@ async function streamWithTools(
         messageCount: openaiMessages.length,
         toolCount: tools.length,
         iteration,
+        maxToolIterations,
     });
     logger.silly("OpenAI API request body", { body });
 
@@ -589,12 +678,30 @@ async function streamWithTools(
             })}\n\n`,
         );
     }
+    if (
+        contentSanitizer.suppressedRawToolCall() &&
+        !responseContent &&
+        finishReason !== "tool_calls"
+    ) {
+        res.write(
+            `data: ${JSON.stringify({
+                choices: [
+                    {
+                        delta: {
+                            content:
+                                "I tried to call another tool, but the app could not execute that text-form tool call. Please send the request again if you want me to continue browsing.",
+                        },
+                    },
+                ],
+            })}\n\n`,
+        );
+    }
 
     // Handle tool calls
     if (
         finishReason === "tool_calls" &&
         toolCalls.size > 0 &&
-        iteration < MAX_TOOL_ITERATIONS
+        iteration < maxToolIterations
     ) {
         const toolCallsArray = Array.from(toolCalls.values());
 
@@ -674,10 +781,46 @@ async function streamWithTools(
             res,
             signal,
             iteration + 1,
+            maxToolIterations,
         );
     }
 
-    // Final response or max iterations reached - nothing more to do
+    if (
+        finishReason === "tool_calls" &&
+        toolCalls.size > 0 &&
+        tools.length > 0
+    ) {
+        logger.warn("OpenAI API requested tools after tool iteration limit", {
+            model,
+            iteration,
+            maxToolIterations,
+            tools: Array.from(toolCalls.values()).map((tc) => tc.function.name),
+        });
+
+        if (forwardedChunks) {
+            res.write("event: clear_content\ndata: {}\n\n");
+        }
+
+        return streamWithTools(
+            baseUrl,
+            apiKey,
+            model,
+            [
+                ...openaiMessages,
+                {
+                    role: "system",
+                    content: `The application has reached its limit of ${maxToolIterations} tool-use rounds for this response. Do not call any more tools and do not write tool-call markup such as <|tool_call>. Write the best final answer using the tool results already available, and say plainly if the task could not be completed.`,
+                },
+            ],
+            [],
+            res,
+            signal,
+            iteration + 1,
+            maxToolIterations,
+        );
+    }
+
+    // Final response - nothing more to do
     res.end();
 }
 
@@ -704,6 +847,7 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
     const searchEnabled = getSetting("searchEnabled") === "true";
     const memoryEnabled = getSetting("memoryEnabled") === "true";
     const executeEnabled = getSetting("executeEnabled") === "true";
+    const browserEnabled = getSetting("browserEnabled") === "true";
     const searchProvider = getSetting("searchProvider") ?? "brave";
     const hasSearchCredentials =
         searchProvider === "searxng"
@@ -726,13 +870,21 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
     if (toolsEnabled && executeEnabled) {
         tools.push(...executeTools);
     }
+    if (toolsEnabled && browserEnabled) {
+        tools.push(...browserAutomationTools);
+    }
     const useTools = tools.length > 0;
+    const maxToolIterations =
+        toolsEnabled && browserEnabled
+            ? MAX_BROWSER_TOOL_ITERATIONS
+            : MAX_TOOL_ITERATIONS;
 
     try {
         const openaiMessages = addSystemPrompts(
             toOpenAIMessages(messages),
             !!toolsEnabled && memoryEnabled,
             !!toolsEnabled && executeEnabled,
+            !!toolsEnabled && browserEnabled,
         );
 
         if (useTools) {
@@ -748,6 +900,8 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
                 tools,
                 res,
                 (req as unknown as { signal?: AbortSignal }).signal,
+                0,
+                maxToolIterations,
             );
         } else {
             // Original passthrough streaming

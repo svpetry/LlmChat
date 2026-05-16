@@ -135,6 +135,58 @@ vi.mock("../execute.js", () => ({
     ],
 }));
 
+const mockExecuteBrowserTool = vi.fn();
+
+vi.mock("../browserAutomation.js", () => ({
+    executeBrowserTool: mockExecuteBrowserTool,
+    browserAutomationTools: [
+        {
+            type: "function",
+            function: {
+                name: "browser_navigate",
+                description: "Navigate to a URL",
+                parameters: {
+                    type: "object",
+                    properties: { url: { type: "string" } },
+                    required: ["url"],
+                },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "browser_screenshot",
+                description: "Take a screenshot",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "browser_get_text",
+                description: "Get page text",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "browser_click",
+                description: "Click an element",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+        {
+            type: "function",
+            function: {
+                name: "browser_type",
+                description: "Type text into a field",
+                parameters: { type: "object", properties: {} },
+            },
+        },
+    ],
+}));
+
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -329,6 +381,38 @@ describe("execute settings", () => {
         expect(res.status).toBe(200);
         expect(res.body).toEqual({ ok: true });
         expect(mockSetSetting).toHaveBeenCalledWith("executeEnabled", "true");
+    });
+});
+
+describe("browser settings", () => {
+    it("defaults browser automation to disabled", async () => {
+        mockGetAllSettings.mockReturnValue({});
+
+        const res = await request(createApp()).get("/api/browser-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: false });
+    });
+
+    it("returns stored browser setting", async () => {
+        mockGetAllSettings.mockReturnValue({
+            browserEnabled: "true",
+        });
+
+        const res = await request(createApp()).get("/api/browser-settings");
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ enabled: true });
+    });
+
+    it("saves browser setting", async () => {
+        const res = await request(createApp())
+            .post("/api/browser-settings")
+            .send({ enabled: true });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual({ ok: true });
+        expect(mockSetSetting).toHaveBeenCalledWith("browserEnabled", "true");
     });
 });
 
@@ -1660,7 +1744,11 @@ describe("POST /api/chat", () => {
                 createStreamResponse([
                     sseData({
                         choices: [
-                            { delta: { content: "Python 3.12.0 is installed." } },
+                            {
+                                delta: {
+                                    content: "Python 3.12.0 is installed.",
+                                },
+                            },
                         ],
                     }),
                     "data: [DONE]\n\n",
@@ -1737,9 +1825,7 @@ describe("POST /api/chat", () => {
             .mockResolvedValueOnce(
                 createStreamResponse([
                     sseData({
-                        choices: [
-                            { delta: { content: "Cannot execute." } },
-                        ],
+                        choices: [{ delta: { content: "Cannot execute." } }],
                     }),
                     "data: [DONE]\n\n",
                 ]),
@@ -1754,11 +1840,329 @@ describe("POST /api/chat", () => {
             });
 
         expect(res.status).toBe(200);
-        expect(res.text).toContain(
-            "Error: Command execution is disabled",
-        );
+        expect(res.text).toContain("Error: Command execution is disabled");
         expect(res.text).toContain("Cannot execute.");
         expect(mockExecuteCommandTool).not.toHaveBeenCalled();
+    });
+
+    it("advertises browser tools when browser automation is enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "browserEnabled") return "true";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue(
+            createStreamResponse([
+                sseData({
+                    choices: [{ delta: { content: "Ready." } }],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse a site" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools: { function: { name: string } }[];
+        };
+        expect(body.tools.map((tool) => tool.function.name)).toEqual([
+            "browser_navigate",
+            "browser_screenshot",
+            "browser_get_text",
+            "browser_click",
+            "browser_type",
+        ]);
+    });
+
+    it("does not advertise browser tools when disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue({
+            ok: true,
+            body: {
+                getReader: () => ({
+                    read: vi.fn(async () => ({ done: true })),
+                }),
+            },
+        });
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse a site" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        const body = JSON.parse(mockFetch.mock.calls[0][1].body as string) as {
+            tools?: unknown[];
+        };
+        expect(body.tools).toBeUndefined();
+    });
+
+    it("executes browser_navigate tool calls when enabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "browserEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteBrowserTool.mockResolvedValue({
+            summary: "Navigated to https://example.com",
+            content: JSON.stringify({
+                url: "https://example.com",
+                title: "Example Domain",
+                status: "ok",
+            }),
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_browser",
+                                            type: "function",
+                                            function: {
+                                                name: "browser_navigate",
+                                                arguments:
+                                                    '{"url":"https://example.com"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            { delta: { content: "I browsed the site." } },
+                        ],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse example.com" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(mockExecuteBrowserTool).toHaveBeenCalledWith(
+            "browser_navigate",
+            '{"url":"https://example.com"}',
+        );
+        expect(res.text).toContain("tool_call");
+        expect(res.text).toContain("browser_navigate");
+        expect(res.text).toContain("I browsed the site.");
+    });
+
+    it("asks for a final answer instead of ending silently when tool iterations are exhausted", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "browserEnabled") return "true";
+            return undefined;
+        });
+        mockExecuteBrowserTool.mockResolvedValue({
+            summary: "Extracted text from https://example.com",
+            content: JSON.stringify({ url: "https://example.com" }),
+        });
+
+        for (let i = 0; i < 13; i++) {
+            mockFetch.mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: `call_browser_${i}`,
+                                            type: "function",
+                                            function: {
+                                                name: "browser_get_text",
+                                                arguments: "{}",
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+        }
+        mockFetch.mockResolvedValueOnce(
+            createStreamResponse([
+                sseData({
+                    choices: [
+                        {
+                            delta: {
+                                content:
+                                    "I could not complete the browsing task, but here is what I found.",
+                            },
+                        },
+                    ],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse example.com" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(mockExecuteBrowserTool).toHaveBeenCalledTimes(12);
+        expect(mockFetch).toHaveBeenCalledTimes(14);
+        expect(res.text).toContain(
+            "I could not complete the browsing task, but here is what I found.",
+        );
+
+        const finalBody = JSON.parse(
+            mockFetch.mock.calls[13][1].body as string,
+        );
+        expect(finalBody.tools).toBeUndefined();
+        expect(finalBody.messages.at(-1)).toMatchObject({
+            role: "system",
+        });
+    });
+
+    it("does not show raw tool-call markup as assistant text", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "browserEnabled") return "true";
+            return undefined;
+        });
+        mockFetch.mockResolvedValue(
+            createStreamResponse([
+                sseData({
+                    choices: [
+                        {
+                            delta: {
+                                content:
+                                    '<|tool_call>call:browser_click{"text":"Search"}<tool_call|>',
+                            },
+                        },
+                    ],
+                }),
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse example.com" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).not.toContain("<|tool_call>");
+        expect(res.text).not.toContain("browser_click");
+        expect(res.text).toContain("text-form tool call");
+    });
+
+    it("refuses browser tool calls when disabled", async () => {
+        mockGetSetting.mockImplementation((key: string) => {
+            if (key === "baseUrl") return "http://llm.example.com/v1";
+            if (key === "apiKey") return "key";
+            if (key === "searchEnabled") return "true";
+            if (key === "searchProvider") return "brave";
+            return undefined;
+        });
+
+        mockFetch
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [
+                            {
+                                delta: {
+                                    tool_calls: [
+                                        {
+                                            index: 0,
+                                            id: "call_browser",
+                                            type: "function",
+                                            function: {
+                                                name: "browser_navigate",
+                                                arguments:
+                                                    '{"url":"https://example.com"}',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        ],
+                    }),
+                    sseData({
+                        choices: [{ delta: {}, finish_reason: "tool_calls" }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            )
+            .mockResolvedValueOnce(
+                createStreamResponse([
+                    sseData({
+                        choices: [{ delta: { content: "Cannot browse." } }],
+                    }),
+                    "data: [DONE]\n\n",
+                ]),
+            );
+
+        const res = await request(createApp())
+            .post("/api/chat")
+            .send({
+                messages: [{ role: "user", content: "browse a site" }],
+                model: "gpt-4",
+                toolsEnabled: true,
+            });
+
+        expect(res.status).toBe(200);
+        expect(res.text).toContain("Error: Browser automation is disabled");
+        expect(res.text).toContain("Cannot browse.");
+        expect(mockExecuteBrowserTool).not.toHaveBeenCalled();
     });
 
     it("forwards upstream API error", async () => {
@@ -2184,9 +2588,7 @@ describe("POST /api/chats/:chatId/generate-title", () => {
         expect(res.status).toBe(200);
         expect(body.max_tokens).toBe(512);
         expect(body.chat_template_kwargs?.enable_thinking).toBe(false);
-        expect(body.messages[1].content).toContain(
-            "Write a C64 BASIC loop",
-        );
+        expect(body.messages[1].content).toContain("Write a C64 BASIC loop");
         expect(body.messages[1].content).toContain("/no_think");
         expect(mockGetMessagesByChat).not.toHaveBeenCalled();
         expect(mockUpdateChatTitle).toHaveBeenCalledWith(

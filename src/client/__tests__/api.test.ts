@@ -188,4 +188,40 @@ describe("streamChat", () => {
             { content: "Done" },
         ]);
     });
+
+    it("parses custom SSE events split across network chunks", async () => {
+        mockFetch.mockResolvedValue(
+            streamResponse([
+                "event: tool_result\n",
+                'data: {"toolCallId":"call_1","content":"Screenshot captured","image":{"path":"https://example.test","name":"screenshot.jpg","mimeType":"image/jpeg","bytes":123,"dataUrl":"data:image/jpeg;base64,abc"}}\n\n',
+                "data: [DONE]\n\n",
+            ]),
+        );
+
+        const chunks = [];
+        for await (const chunk of streamChat(
+            [{ role: "user", content: "look" }],
+            "model-a",
+            undefined,
+            true,
+        )) {
+            chunks.push(chunk);
+        }
+
+        expect(chunks).toEqual([
+            {
+                toolResult: {
+                    toolCallId: "call_1",
+                    content: "Screenshot captured",
+                    image: {
+                        path: "https://example.test",
+                        name: "screenshot.jpg",
+                        mimeType: "image/jpeg",
+                        bytes: 123,
+                        dataUrl: "data:image/jpeg;base64,abc",
+                    },
+                },
+            },
+        ]);
+    });
 });

@@ -15,12 +15,14 @@ import {
     Typography,
 } from "@mui/material";
 import { executeSettingsAtom, fileAccessSettingsAtom, searchSettingsAtom } from "../atoms.js";
-import { memorySettingsAtom } from "../atoms.js";
+import { memorySettingsAtom, browserSettingsAtom } from "../atoms.js";
 import {
+    fetchBrowserSettings,
     fetchExecuteSettings,
     fetchFileAccessSettings,
     fetchMemorySettings,
     fetchSearchSettings,
+    saveBrowserSettings,
     saveExecuteSettings,
     saveFileAccessSettings,
     saveMemorySettings,
@@ -37,10 +39,12 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
     const [, setFileAccessSettings] = useAtom(fileAccessSettingsAtom);
     const [, setMemorySettings] = useAtom(memorySettingsAtom);
     const [, setExecuteSettings] = useAtom(executeSettingsAtom);
+    const [, setBrowserSettings] = useAtom(browserSettingsAtom);
     const [enabled, setEnabled] = useState(false);
     const [fileAccessEnabled, setFileAccessEnabled] = useState(false);
     const [memoryEnabled, setMemoryEnabled] = useState(false);
     const [executeEnabled, setExecuteEnabled] = useState(false);
+    const [browserEnabled, setBrowserEnabled] = useState(false);
     const [provider, setProvider] = useState<"brave" | "searxng">("brave");
     const [apiKey, setApiKey] = useState("");
     const [searxngUrl, setSearxngUrl] = useState("");
@@ -58,21 +62,24 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
             fetchFileAccessSettings(),
             fetchMemorySettings(),
             fetchExecuteSettings(),
-        ]).then(([s, f, m, x]) => {
+            fetchBrowserSettings(),
+        ]).then(([s, f, m, x, b]) => {
             setSearchSettings(s);
             setFileAccessSettings(f);
             setMemorySettings(m);
             setExecuteSettings(x);
+            setBrowserSettings(b);
             setEnabled(s.enabled);
             setFileAccessEnabled(f.enabled);
             setMemoryEnabled(m.enabled);
             setExecuteEnabled(x.enabled);
+            setBrowserEnabled(b.enabled);
             setProvider(s.provider);
             setApiKey("");
             setSearxngUrl("");
             setLoaded(true);
         });
-    }, [open, setExecuteSettings, setFileAccessSettings, setMemorySettings, setSearchSettings]);
+    }, [open, setBrowserSettings, setExecuteSettings, setFileAccessSettings, setMemorySettings, setSearchSettings]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -92,18 +99,21 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                 saveFileAccessSettings({ enabled: fileAccessEnabled }),
                 saveMemorySettings({ enabled: memoryEnabled }),
                 saveExecuteSettings({ enabled: executeEnabled }),
+                saveBrowserSettings({ enabled: browserEnabled }),
             ]);
-            const [updatedSearch, updatedFileAccess, updatedMemory, updatedExecute] =
+            const [updatedSearch, updatedFileAccess, updatedMemory, updatedExecute, updatedBrowser] =
                 await Promise.all([
                     fetchSearchSettings(),
                     fetchFileAccessSettings(),
                     fetchMemorySettings(),
                     fetchExecuteSettings(),
+                    fetchBrowserSettings(),
                 ]);
             setSearchSettings(updatedSearch);
             setFileAccessSettings(updatedFileAccess);
             setMemorySettings(updatedMemory);
             setExecuteSettings(updatedExecute);
+            setBrowserSettings(updatedBrowser);
             onClose();
         } finally {
             setSaving(false);
@@ -254,6 +264,26 @@ export default function ChatSettingsDialog({ open, onClose }: Props) {
                             Allows the model to execute shell commands
                             (PowerShell on Windows, /bin/sh on other platforms)
                             in your home directory. Use with caution.
+                        </Typography>
+                    </Box>
+
+                    <Box>
+                        <FormControlLabel
+                            control={
+                                <Switch
+                                    checked={browserEnabled}
+                                    onChange={(e) =>
+                                        setBrowserEnabled(e.target.checked)
+                                    }
+                                />
+                            }
+                            label="Browser Automation"
+                        />
+                        <Typography variant="caption" color="text.secondary">
+                            Allows the model to control a headless browser:
+                            navigate websites, take screenshots, click elements,
+                            type into forms, scroll, and extract page content.
+                            Requires a vision-capable model for screenshots.
                         </Typography>
                     </Box>
                 </Box>

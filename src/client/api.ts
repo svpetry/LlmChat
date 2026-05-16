@@ -1,4 +1,5 @@
 import type {
+    BrowserSettings,
     ChatSummary,
     ExecuteSettings,
     FileAccessSettings,
@@ -79,6 +80,7 @@ export async function* streamChat(
     const reader = res.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let currentEvent = "";
 
     while (true) {
         const { done, value } = await reader.read();
@@ -88,7 +90,6 @@ export async function* streamChat(
         const lines = buffer.split("\n");
         buffer = lines.pop()!;
 
-        let currentEvent = "";
         for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.startsWith("event: ")) {
@@ -206,6 +207,22 @@ export async function saveExecuteSettings(data: {
     enabled?: boolean;
 }): Promise<{ ok: boolean }> {
     const res = await fetch(`${API}/execute-settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
+export async function fetchBrowserSettings(): Promise<BrowserSettings> {
+    const res = await fetch(`${API}/browser-settings`);
+    return res.json();
+}
+
+export async function saveBrowserSettings(data: {
+    enabled?: boolean;
+}): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API}/browser-settings`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),

@@ -19,6 +19,10 @@ import StopIcon from "@mui/icons-material/Stop";
 import {
     connectionAtom,
     defaultConnection,
+    browserSettingsAtom,
+    type BrowserSettings,
+    executeSettingsAtom,
+    type ExecuteSettings,
     fileAccessSettingsAtom,
     type FileAccessSettings,
     memorySettingsAtom,
@@ -36,6 +40,8 @@ import {
 import {
     fetchFileAccessSettings,
     fetchMemorySettings,
+    fetchBrowserSettings,
+    fetchExecuteSettings,
     fetchSearchSettings,
     streamChat,
     fetchChats,
@@ -59,6 +65,8 @@ export default function ChatScreen() {
         fileAccessSettingsAtom,
     );
     const [memorySettings, setMemorySettings] = useAtom(memorySettingsAtom);
+    const [executeSettings, setExecuteSettings] = useAtom(executeSettingsAtom);
+    const [browserSettings, setBrowserSettings] = useAtom(browserSettingsAtom);
     const [activeChatId, setActiveChatId] = useAtom(activeChatIdAtom);
     const [chatList, setChatList] = useAtom(chatListAtom);
     const [searchSettingsLoaded, setSearchSettingsLoaded] = useState(false);
@@ -78,6 +86,12 @@ export default function ChatScreen() {
     const fileAccessSettingsPromiseRef =
         useRef<Promise<FileAccessSettings> | null>(null);
     const memorySettingsPromiseRef = useRef<Promise<MemorySettings> | null>(
+        null,
+    );
+    const executeSettingsPromiseRef = useRef<Promise<ExecuteSettings> | null>(
+        null,
+    );
+    const browserSettingsPromiseRef = useRef<Promise<BrowserSettings> | null>(
         null,
     );
     const initializedRef = useRef(false);
@@ -101,16 +115,30 @@ export default function ChatScreen() {
             fileAccessSettingsPromiseRef.current ?? fetchFileAccessSettings();
         const memoryLoad =
             memorySettingsPromiseRef.current ?? fetchMemorySettings();
+        const executeLoad =
+            executeSettingsPromiseRef.current ?? fetchExecuteSettings();
+        const browserLoad =
+            browserSettingsPromiseRef.current ?? fetchBrowserSettings();
         searchSettingsPromiseRef.current = searchLoad;
         fileAccessSettingsPromiseRef.current = fileAccessLoad;
         memorySettingsPromiseRef.current = memoryLoad;
+        executeSettingsPromiseRef.current = executeLoad;
+        browserSettingsPromiseRef.current = browserLoad;
 
-        Promise.all([searchLoad, fileAccessLoad, memoryLoad])
-            .then(([settings, fileSettings, memory]) => {
+        Promise.all([
+            searchLoad,
+            fileAccessLoad,
+            memoryLoad,
+            executeLoad,
+            browserLoad,
+        ])
+            .then(([settings, fileSettings, memory, execute, browser]) => {
                 if (cancelled) return;
                 setSearchSettings(settings);
                 setFileAccessSettings(fileSettings);
                 setMemorySettings(memory);
+                setExecuteSettings(execute);
+                setBrowserSettings(browser);
             })
             .catch(() => {
                 // Leave tools disabled if settings cannot be loaded.
@@ -121,12 +149,20 @@ export default function ChatScreen() {
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
                 memorySettingsPromiseRef.current = null;
+                executeSettingsPromiseRef.current = null;
+                browserSettingsPromiseRef.current = null;
             });
 
         return () => {
             cancelled = true;
         };
-    }, [setFileAccessSettings, setMemorySettings, setSearchSettings]);
+    }, [
+        setBrowserSettings,
+        setExecuteSettings,
+        setFileAccessSettings,
+        setMemorySettings,
+        setSearchSettings,
+    ]);
 
     // Load chat list and initialize on mount
     useEffect(() => {
@@ -228,6 +264,8 @@ export default function ChatScreen() {
         let searchSettingsForSend = searchSettings;
         let fileAccessSettingsForSend = fileAccessSettings;
         let memorySettingsForSend = memorySettings;
+        let executeSettingsForSend = executeSettings;
+        let browserSettingsForSend = browserSettings;
         if (!searchSettingsLoaded) {
             try {
                 const searchLoad =
@@ -237,32 +275,54 @@ export default function ChatScreen() {
                     fetchFileAccessSettings();
                 const memoryLoad =
                     memorySettingsPromiseRef.current ?? fetchMemorySettings();
+                const executeLoad =
+                    executeSettingsPromiseRef.current ?? fetchExecuteSettings();
+                const browserLoad =
+                    browserSettingsPromiseRef.current ?? fetchBrowserSettings();
                 searchSettingsPromiseRef.current = searchLoad;
                 fileAccessSettingsPromiseRef.current = fileAccessLoad;
                 memorySettingsPromiseRef.current = memoryLoad;
+                executeSettingsPromiseRef.current = executeLoad;
+                browserSettingsPromiseRef.current = browserLoad;
                 [
                     searchSettingsForSend,
                     fileAccessSettingsForSend,
                     memorySettingsForSend,
-                ] = await Promise.all([searchLoad, fileAccessLoad, memoryLoad]);
+                    executeSettingsForSend,
+                    browserSettingsForSend,
+                ] = await Promise.all([
+                    searchLoad,
+                    fileAccessLoad,
+                    memoryLoad,
+                    executeLoad,
+                    browserLoad,
+                ]);
                 setSearchSettings(searchSettingsForSend);
                 setFileAccessSettings(fileAccessSettingsForSend);
                 setMemorySettings(memorySettingsForSend);
+                setExecuteSettings(executeSettingsForSend);
+                setBrowserSettings(browserSettingsForSend);
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
                 memorySettingsPromiseRef.current = null;
+                executeSettingsPromiseRef.current = null;
+                browserSettingsPromiseRef.current = null;
             } catch {
                 setSearchSettingsLoaded(true);
                 searchSettingsPromiseRef.current = null;
                 fileAccessSettingsPromiseRef.current = null;
                 memorySettingsPromiseRef.current = null;
+                executeSettingsPromiseRef.current = null;
+                browserSettingsPromiseRef.current = null;
             }
         }
         const toolsEnabled = canUseTools(
             searchSettingsForSend,
             fileAccessSettingsForSend,
             memorySettingsForSend,
+            executeSettingsForSend,
+            browserSettingsForSend,
         );
 
         const setAssistantMessage = (
@@ -427,10 +487,7 @@ export default function ChatScreen() {
                                 ),
                             );
                         } catch (err) {
-                            console.warn(
-                                "Failed to generate chat title",
-                                err,
-                            );
+                            console.warn("Failed to generate chat title", err);
                         }
                     })();
                 }
