@@ -24,12 +24,15 @@ export default function MessageBox({
     onToggleThinking,
     onToggleTools,
 }: MessageBoxProps) {
+    const toolResultsByCallId = new Map(
+        msg.toolResults?.map((result) => [result.toolCallId, result]) ?? [],
+    );
+
     return (
         <Box
             sx={{
                 display: "flex",
-                justifyContent:
-                    msg.role === "user" ? "flex-end" : "flex-start",
+                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
                 mb: 2,
             }}
         >
@@ -39,8 +42,7 @@ export default function MessageBox({
                     pt: 0.5,
                     pb: 1,
                     width: "80%",
-                    bgcolor:
-                        msg.role === "user" ? "primary.main" : "grey.800",
+                    bgcolor: msg.role === "user" ? "primary.main" : "grey.800",
                     wordBreak: "break-word",
                 }}
             >
@@ -93,6 +95,8 @@ export default function MessageBox({
                                         {msg.toolCalls?.map((tc, j) => {
                                             const toolDisplay =
                                                 getToolDisplay(tc);
+                                            const toolResult =
+                                                toolResultsByCallId.get(tc.id);
                                             return (
                                                 <Box
                                                     key={tc.id}
@@ -126,10 +130,7 @@ export default function MessageBox({
                                                                 "pre-wrap",
                                                         }}
                                                     >
-                                                        {
-                                                            msg.toolResults?.[j]
-                                                                ?.content
-                                                        }
+                                                        {toolResult?.content}
                                                     </Typography>
                                                 </Box>
                                             );
@@ -322,11 +323,26 @@ export default function MessageBox({
                                 "& hr": {
                                     borderColor: "grey.700",
                                 },
+                                "& a": {
+                                    color: "inherit",
+                                    textDecoration: "underline",
+                                },
                             }}
                         >
                             <ReactMarkdown
                                 remarkPlugins={[remarkGfm, remarkMath]}
                                 rehypePlugins={[rehypeKatex]}
+                                components={{
+                                    a: ({ node, children, ...props }) => (
+                                        <a
+                                            {...props}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                        >
+                                            {children}
+                                        </a>
+                                    ),
+                                }}
                             >
                                 {msg.content || "..."}
                             </ReactMarkdown>
