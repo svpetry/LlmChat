@@ -19,6 +19,10 @@ const MAX_TOOL_ITERATIONS = 5;
 const CURRENT_DATE_TIME_SYSTEM_PROMPT_PREFIX = "Current date and time:";
 const MEMORY_SYSTEM_PROMPT =
     "Memory is enabled. You have durable memory tools backed by the app database. Use save_memory when the user explicitly asks you to remember, save, or keep a fact or preference for later. Use search_memory when remembered facts or preferences may help answer the user's request. Use list_memories when the user asks what you remember. Use update_memory or delete_memory when the user corrects, changes, or asks you to forget a remembered fact; search or list first if you need the memory id. Use clear_memories only when the user clearly asks to clear all memories. Do not claim you remembered, updated, or forgot something unless the relevant memory tool succeeded.";
+const EXECUTE_SYSTEM_PROMPT =
+    process.platform === "win32"
+        ? "You are running on Windows. The execute_command tool uses PowerShell (powershell.exe). Use PowerShell-compatible commands and syntax."
+        : "You are running on Linux. The execute_command tool uses /bin/sh. Use POSIX shell-compatible commands and syntax.";
 const CHANNEL_LABELS = ["analysis", "commentary", "final", "thought"];
 const CONTROL_TOKEN_NAMES = [
     "call",
@@ -202,7 +206,11 @@ function formatCurrentDateTime(date = new Date()): string {
     }).format(date);
 }
 
-function addSystemPrompts<T>(messages: T[], includeMemoryPrompt: boolean): T[] {
+function addSystemPrompts<T>(
+    messages: T[],
+    includeMemoryPrompt: boolean,
+    includeExecutePrompt: boolean,
+): T[] {
     const systemMessages = [
         {
             role: "system",
@@ -214,6 +222,13 @@ function addSystemPrompts<T>(messages: T[], includeMemoryPrompt: boolean): T[] {
         systemMessages.push({
             role: "system",
             content: MEMORY_SYSTEM_PROMPT,
+        } as T);
+    }
+
+    if (includeExecutePrompt) {
+        systemMessages.push({
+            role: "system",
+            content: EXECUTE_SYSTEM_PROMPT,
         } as T);
     }
 
@@ -688,6 +703,7 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
 
     const searchEnabled = getSetting("searchEnabled") === "true";
     const memoryEnabled = getSetting("memoryEnabled") === "true";
+    const executeEnabled = getSetting("executeEnabled") === "true";
     const searchProvider = getSetting("searchProvider") ?? "brave";
     const hasSearchCredentials =
         searchProvider === "searxng"
@@ -707,7 +723,7 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
     if (toolsEnabled && memoryEnabled) {
         tools.push(...memoryTools);
     }
-    if (toolsEnabled && getSetting("executeEnabled") === "true") {
+    if (toolsEnabled && executeEnabled) {
         tools.push(...executeTools);
     }
     const useTools = tools.length > 0;
@@ -716,6 +732,7 @@ chatCompletionRouter.post("/api/chat", async (req, res) => {
         const openaiMessages = addSystemPrompts(
             toOpenAIMessages(messages),
             !!toolsEnabled && memoryEnabled,
+            !!toolsEnabled && executeEnabled,
         );
 
         if (useTools) {

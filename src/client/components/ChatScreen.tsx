@@ -48,7 +48,7 @@ import {
 import ChatSettingsDialog from "./ChatSettingsDialog.js";
 import ChatSidebar from "./ChatSidebar.js";
 import MessageBox from "./MessageBox.js";
-import { canUseTools, estimateTokens } from "./chatUtils.js";
+import { canUseTools } from "./chatUtils.js";
 
 export default function ChatScreen() {
     const [connection, setConnection] = useAtom(connectionAtom);
@@ -585,17 +585,6 @@ export default function ChatScreen() {
                         )}
                     </Box>
                 </Container>
-                <Typography
-                    variant="caption"
-                    sx={{
-                        px: 2,
-                        py: 0.25,
-                        color: "grey.500",
-                        textAlign: "center",
-                    }}
-                >
-                    ~{estimateTokens(messages).toLocaleString()} tokens in context
-                </Typography>
             </Box>
         </Box>
     );

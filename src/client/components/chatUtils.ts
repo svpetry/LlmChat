@@ -1,7 +1,6 @@
 import type {
     FileAccessSettings,
     MemorySettings,
-    Message,
     SearchSettings,
     ToolCall,
 } from "../atoms.js";
@@ -100,23 +99,4 @@ export function getToolDisplay(toolCall: ToolCall) {
     }
 
     return { label: toolCall.name, detail: toolCall.arguments };
-}
-
-export function estimateTokens(messages: Message[]): number {
-    let chars = 0;
-    for (const msg of messages) {
-        chars += msg.content.length;
-        if (msg.thinking) chars += msg.thinking.length;
-        if (msg.toolCalls) {
-            for (const tc of msg.toolCalls) {
-                chars += tc.name.length + tc.arguments.length;
-            }
-        }
-        if (msg.toolResults) {
-            for (const tr of msg.toolResults) {
-                chars += tr.content.length;
-            }
-        }
-    }
-    return Math.round(chars / 4);
 }
