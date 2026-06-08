@@ -333,7 +333,7 @@ export default function MessageBox({
                                 remarkPlugins={[remarkGfm, remarkMath]}
                                 rehypePlugins={[rehypeKatex]}
                                 components={{
-                                    a: ({ node, children, ...props }) => (
+                                    a: ({ node: _node, children, ...props }) => (
                                         <a
                                             {...props}
                                             target="_blank"
